@@ -361,14 +361,21 @@ def summarize(
     return stats
 
 
+def strip_ansi(text: str) -> str:
+    """Remove ANSI escape sequences from the string."""
+    ansi_escape = re.compile(r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
+    return ansi_escape.sub("", text)
+
+
 def append_report_to_attempt(attempt_path: Path, report: str) -> None:
     """Append the rendered report to the attempt file for later review."""
+    clean_report = strip_ansi(report)
     try:
         with attempt_path.open("a", encoding="utf-8") as handle:
             handle.write("\n")
-            if not report.endswith("\n"):
-                report = report + "\n"
-            handle.write(report)
+            if not clean_report.endswith("\n"):
+                clean_report = clean_report + "\n"
+            handle.write(clean_report)
     except OSError as exc:
         die(f"Failed to append report to '{attempt_path}': {exc}")
 
