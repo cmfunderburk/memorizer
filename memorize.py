@@ -380,6 +380,38 @@ def append_report_to_attempt(attempt_path: Path, report: str) -> None:
         die(f"Failed to append report to '{attempt_path}': {exc}")
 
 
+def compute_perfect_match(diff_ops, stats: dict) -> bool:
+    """Determine if the attempt is a perfect match."""
+    differences_found = any(tag != "equal" for tag, *_ in diff_ops)
+    return (
+        not differences_found
+        and stats["total_expected_lines"] == stats["total_actual_lines"]
+        and stats["matching_chars"] == stats["total_expected_chars"]
+    )
+
+
+def prompt_try_again() -> bool:
+    """Prompt user to try again. Returns True if user wants to retry, False otherwise."""
+    while True:
+        try:
+            response = input("Try again? [Y/n] ").strip().lower()
+            if response == "" or response == "y":
+                return True
+            elif response == "n":
+                return False
+            else:
+                print("Please enter Y or n")
+                continue
+        except KeyboardInterrupt:
+            # Ctrl+C - exit gracefully with code 130
+            print()  # Newline after ^C
+            raise SystemExit(130)
+        except EOFError:
+            # Ctrl+D - treat as No
+            print()  # Newline for clean output
+            return False
+
+
 # ==========================================================================
 # MAIN
 # ==========================================================================
@@ -387,36 +419,40 @@ def append_report_to_attempt(attempt_path: Path, report: str) -> None:
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
     solution_path = validate_solution_path(args.solution)
-    attempt_path = create_attempt_file(solution_path)
-
     editor_cmd = detect_editor()
-    launch_editor(editor_cmd, attempt_path)
 
-    expected_lines = read_file_lines(solution_path)
-    actual_lines = read_file_lines(attempt_path)
-    diff_ops = compute_line_diff(expected_lines, actual_lines)
+    while True:
+        attempt_path = create_attempt_file(solution_path)
+        launch_editor(editor_cmd, attempt_path)
 
-    report_buffer = io.StringIO()
-    tee = TeeWriter(sys.stdout, report_buffer)
+        expected_lines = read_file_lines(solution_path)
+        actual_lines = read_file_lines(attempt_path)
+        diff_ops = compute_line_diff(expected_lines, actual_lines)
 
-    render_diff_report(
-        solution_path,
-        attempt_path,
-        diff_ops,
-        expected_lines,
-        actual_lines,
-        out=tee,
-    )
-    stats = summarize(diff_ops, expected_lines, actual_lines, out=tee)
-    append_report_to_attempt(attempt_path, report_buffer.getvalue())
+        report_buffer = io.StringIO()
+        tee = TeeWriter(sys.stdout, report_buffer)
 
-    differences_found = any(tag != "equal" for tag, *_ in diff_ops)
-    perfect_match = (
-        not differences_found
-        and stats["total_expected_lines"] == stats["total_actual_lines"]
-        and stats["matching_chars"] == stats["total_expected_chars"]
-    )
-    return 0 if perfect_match else 1
+        render_diff_report(
+            solution_path,
+            attempt_path,
+            diff_ops,
+            expected_lines,
+            actual_lines,
+            out=tee,
+        )
+        stats = summarize(diff_ops, expected_lines, actual_lines, out=tee)
+        append_report_to_attempt(attempt_path, report_buffer.getvalue())
+
+        perfect_match = compute_perfect_match(diff_ops, stats)
+
+        if perfect_match:
+            return 0
+
+        # Not perfect - prompt to try again
+        if not prompt_try_again():
+            return 1
+
+        # User wants to try again - loop continues
 
 
 if __name__ == "__main__":

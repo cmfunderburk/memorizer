@@ -1,0 +1,39 @@
+---
+alwaysApply: true
+---
+# Planning-Only Mode for Complex Features
+
+## Critical Rule: No Implementation During Planning Phase
+
+**ABSOLUTE RULE**: When working on any complex feature planning, DO NOT make any code changes until explicitly told by the user to start implementation.
+
+## Planning Phase Requirements
+
+During planning discussions:
+1. **Focus on conceptual clarity**
+2. **Design before coding** - Create comprehensive plans before any implementation
+3. **Document decisions** - Write down design choices and rationale
+4. **Validate approach** - Confirm understanding with user before proceeding
+
+## Implementation Phase
+
+Only begin implementation when the user explicitly states:
+- "Start implementing"
+- "Begin coding"
+- "Make the changes"
+- Or similar clear implementation directives
+
+## Why This Matters
+
+There are costs to implementing the wrong solution, e.g.:
+- Building global systems instead of a problem-specific solutions
+- May waste significant development time on technically correct but functionally wrong approaches
+- May require complete reimplementation after requirements were clarified
+
+## Enforcement
+
+When in planning mode:
+- ❌ DO NOT: Write to existing src/ files.
+- ✅ DO use: read_file, grep, codebase_search, list_dir, web_search
+- ✅ DO: Create planning documents, discuss architecture, clarify requirements. Planning documents always go in docs/planning/CURRENT/
+- ✅ DO: Ask clarifying questions before making assumptions
