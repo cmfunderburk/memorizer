@@ -1,26 +1,26 @@
-def merge(left, right):
+def merge(L, R):
     merged = []
     i = 0
     j = 0
-    while i < len(left) and j < len(right):
-        if left[i] <= right[j]:
-            merged.append(left[i])
+    while i < len(L) and j < len(R):
+        if L[i] <= R[j]:
+            merged.append(L[i])
             i += 1
         else:
-            merged.append(right[j])
+            merged.append(R[j])
             j += 1
-    while i < len(left):
-        merged.append(left[i])
+    while i < len(L):
+        merged.append(L[i])
         i += 1
-    while j < len(right):
-        merged.append(right[j])
+    while j < len(R):
+        merged.append(R[j])
         j += 1
     return merged
 
-def merge_sort(list):
-    if len(list) <= 1:
-        return list
-    mid = len(list) // 2
-    left = merge_sort(list[:mid])
-    right = merge_sort(list[mid:])
-    return merge(left, right)
+def merge_sort(A):
+    if len(A) < 2:
+        return A
+    mid = len(A) // 2
+    L = merge_sort(A[:mid])
+    R = merge_sort(A[mid:])
+    return merge(L, R)
