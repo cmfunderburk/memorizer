@@ -1,8 +1,9 @@
-def insertion_sort(array):
-    n = len(array)
-    for i in range(1, n):
+def insertion_sort(A):
+    for i in range(1, len(A)):
+        key = A[i]
         j = i
-        while j > 0 and array[j-1] > array[j]:
-            array[j-1], array[j] = array[j], array[j-1]
+        while j > 0 and A[j-1] > key:
+            A[j] = A[j-1]
             j -= 1
-    return array
+        A[j] = key
+    return A
