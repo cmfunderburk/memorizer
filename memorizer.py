@@ -11,6 +11,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+from datetime import datetime
 from pathlib import Path
 from typing import List, NoReturn, Protocol, Sequence
 
@@ -75,9 +76,16 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "solution",
+        nargs="?",
         help=(
-            "Path to the canonical solution file (relative to repo or absolute)."
+            "Path to the canonical solution file (relative to repo or absolute). "
+            "If omitted, interactive selection is used."
         ),
+    )
+    parser.add_argument(
+        "--stats",
+        action="store_true",
+        help="Show progress statistics for the selected solution instead of starting a new attempt.",
     )
     return parser.parse_args(argv)
 
@@ -121,6 +129,85 @@ def validate_solution_path(raw: str) -> Path:
     die(
         f"Solution '{raw}' not found. Expected an existing file such as '{search_hint}'."
     )
+
+
+def list_contents(directory: Path) -> List[Path]:
+    """List directories and files in the given directory."""
+    if not directory.exists():
+        return []
+
+    items = [p for p in directory.iterdir() if not p.name.startswith(".")]
+    dirs = sorted([p for p in items if p.is_dir()], key=lambda p: p.name)
+    files = sorted([p for p in items if p.is_file()], key=lambda p: p.name)
+    return dirs + files
+
+
+def interactive_select(start_dir: Path) -> Path:
+    """Prompt user to select a solution from the directory structure."""
+    current_dir = start_dir.resolve()
+    root_dir = SOLUTIONS_ROOT.resolve()
+
+    while True:
+        candidates = list_contents(current_dir)
+        if not candidates and current_dir == root_dir:
+            die(f"No solutions found in {SOLUTIONS_ROOT}")
+
+        # Calculate relative path for display
+        try:
+            rel_path = current_dir.relative_to(root_dir)
+        except ValueError:
+            rel_path = current_dir.name
+
+        print(f"{ANSI_BOLD}Current directory: {rel_path}{ANSI_RESET}")
+        
+        display_list = []
+        # Add ".." option if not at root
+        if current_dir != root_dir:
+            display_list.append(Path(".."))
+        
+        display_list.extend(candidates)
+
+        for i, path in enumerate(display_list, 1):
+            name = path.name + "/" if path.is_dir() and path.name != ".." else path.name
+            print(f" {i:2}. {name}")
+
+        try:
+            raw = input("\nSelect a solution (number or name): ").strip()
+            if not raw:
+                continue
+
+            selected = None
+
+            # Try number
+            if raw.isdigit():
+                idx = int(raw) - 1
+                if 0 <= idx < len(display_list):
+                    selected = display_list[idx]
+
+            # Try name match
+            if not selected:
+                for path in display_list:
+                    # Match name exactly (handling the .. special case)
+                    if path.name == raw:
+                        selected = path
+                        break
+            
+            if not selected:
+                 print("Invalid selection. Please enter a number or exact filename.")
+                 continue
+
+            # Handle Selection
+            if selected.name == "..":
+                current_dir = current_dir.parent
+            elif selected.is_dir():
+                current_dir = selected
+            else:
+                return selected
+
+        except (KeyboardInterrupt, EOFError):
+            print()
+            sys.exit(130)
+
 
 
 def get_next_attempt_path(solution_path: Path) -> Path:
@@ -413,12 +500,107 @@ def prompt_try_again() -> bool:
 
 
 # ==========================================================================
+# STATS & HISTORY
+# ==========================================================================
+
+def get_attempt_history(solution_path: Path) -> List[dict]:
+    """Parse attempt history for the given solution."""
+    basename = solution_path.stem or solution_path.name
+    suffix = solution_path.suffix
+    pattern = f"{basename}-*{suffix}" if suffix else f"{basename}-*"
+
+    attempts = []
+    line_acc_re = re.compile(r"Line accuracy:\s+(\d+\.\d+)%")
+    char_acc_re = re.compile(r"Character accuracy:\s+(\d+\.\d+)%")
+
+    for path in ATTEMPTS_ROOT.glob(pattern):
+        # Ensure strict naming convention match to avoid partial prefix matches
+        if not re.search(rf"{re.escape(basename)}-\d+{re.escape(suffix)}$", path.name):
+            continue
+
+        try:
+            content = path.read_text(encoding="utf-8")
+            line_matches = line_acc_re.findall(content)
+            char_matches = char_acc_re.findall(content)
+
+            if not line_matches or not char_matches:
+                continue
+
+            # Take the last report found in the file
+            line_acc = float(line_matches[-1])
+            char_acc = float(char_matches[-1])
+            timestamp = path.stat().st_mtime
+
+            match = re.search(rf"{re.escape(basename)}-(\d+)", path.name)
+            number = int(match.group(1)) if match else 0
+
+            attempts.append(
+                {
+                    "number": number,
+                    "timestamp": timestamp,
+                    "line_acc": line_acc,
+                    "char_acc": char_acc,
+                    "path": path,
+                }
+            )
+        except OSError:
+            continue
+
+    return sorted(attempts, key=lambda x: x["number"])
+
+
+def render_stats(solution_path: Path, history: List[dict]) -> None:
+    """Print a history table and summary stats."""
+    print(HEADER_RULE)
+    print(f"{ANSI_BOLD}HISTORY:{ANSI_RESET} {solution_path.name}")
+    print(HEADER_RULE)
+
+    if not history:
+        print("No attempts found.")
+        return
+
+    print(f"{'Attempt':<8} {'Date':<12} {'Line Acc':<10} {'Char Acc':<10}")
+    print("-" * 44)
+
+    for item in history:
+        dt = datetime.fromtimestamp(item["timestamp"])
+        date_str = dt.strftime("%Y-%m-%d")
+        print(
+            f"{item['number']:<8} {date_str:<12} {item['line_acc']:>5.1f}%    {item['char_acc']:>5.1f}%"
+        )
+
+    print(HEADER_RULE)
+
+    # Calculate current streak of 100% line accuracy
+    streak = 0
+    for item in reversed(history):
+        if item["line_acc"] == 100.0:
+            streak += 1
+        else:
+            break
+
+    if streak > 0:
+        print(f"Current Streak: {streak} perfect attempt{'s' if streak != 1 else ''}!")
+    print()
+
+
+# ==========================================================================
 # MAIN
 # ==========================================================================
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
-    solution_path = validate_solution_path(args.solution)
+
+    if args.solution:
+        solution_path = validate_solution_path(args.solution)
+    else:
+        solution_path = interactive_select(SOLUTIONS_ROOT)
+
+    if args.stats:
+        history = get_attempt_history(solution_path)
+        render_stats(solution_path, history)
+        return 0
+
     editor_cmd = detect_editor()
 
     while True:
