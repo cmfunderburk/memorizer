@@ -1,9 +1,9 @@
-def insertion_sort(A):
-    for i in range(1, len(A)):
-        key = A[i]
+def insertion_sort(arr):
+    for i in range(1, len(arr)):
+        key = arr[i]
         j = i
-        while j > 0 and A[j-1] > key:
-            A[j] = A[j-1]
+        while j > 0 and arr[j-1] > key:
+            arr[j] = arr[j-1]
             j -= 1
-        A[j] = key
-    return A
+        arr[j] = key
+    return arr

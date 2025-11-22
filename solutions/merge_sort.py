@@ -17,10 +17,10 @@ def merge(L, R):
         j += 1
     return merged
 
-def merge_sort(A):
-    if len(A) < 2:
-        return A
-    mid = len(A) // 2
-    L = merge_sort(A[:mid])
-    R = merge_sort(A[mid:])
+def merge_sort(arr):
+    if len(arr) < 2:
+        return arr
+    mid = len(arr) // 2
+    L = merge_sort(arr[:mid])
+    R = merge_sort(arr[mid:])
     return merge(L, R)
