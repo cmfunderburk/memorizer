@@ -8,9 +8,9 @@ MEMORIZER is a single-user CLI for practicing code or text recall. It opens an e
 
 ## Usage
 ```bash
-python3 memorize.py solutions/insertion_sort.py
-python3 memorize.py insertion_sort.py        # also works; resolved relative to solutions/
-python3 memorize.py ../some/other/file.txt   # arbitrary readable file paths allowed
+python3 memorizer.py solutions/insertion_sort.py
+python3 memorizer.py insertion_sort.py        # also works; resolved relative to solutions/
+python3 memorizer.py ../some/other/file.txt   # arbitrary readable file paths allowed
 ```
 
 The workflow:
@@ -36,12 +36,12 @@ The following manual scenarios were exercised:
 For additional testing, repeat commands such as:
 ```bash
 # Simulate editor input via tee (useful for non-interactive checks)
-printf 'line1\nline2\n' | EDITOR=/usr/bin/tee python3 memorize.py solutions/poem.txt
+printf 'line1\nline2\n' | EDITOR=/usr/bin/tee python3 memorizer.py solutions/poem.txt
 ```
 
 ## Repository Layout
 ```
-memorize.py        # single-file CLI implementation
+memorizer.py        # single-file CLI implementation
 solutions/         # canonical snippets
 attempts/          # auto-created, incrementally numbered attempt files (.gitignored)
 README.md          # this file

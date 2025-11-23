@@ -32,6 +32,7 @@ ANSI_GREEN_BG = "\033[42m"
 ANSI_RESET = "\033[0m"
 ANSI_BOLD = "\033[1m"
 HEADER_RULE = "=" * 40
+MEMO_START_MARKER = "=== MEMO START ==="
 
 
 class Writer(Protocol):
@@ -241,6 +242,18 @@ def create_attempt_file(solution_path: Path) -> Path:
             continue
 
 
+def prefill_attempt_file(attempt_path: Path, context_lines: List[str]) -> None:
+    """Write context header to a new attempt file."""
+    if not context_lines:
+        return
+    try:
+        with attempt_path.open("w", encoding="utf-8") as f:
+            f.write("\n".join(context_lines))
+            f.write(f"\n{MEMO_START_MARKER}\n\n")
+    except OSError as exc:
+        die(f"Failed to write context to '{attempt_path}': {exc}")
+
+
 # ==========================================================================
 # EDITOR MANAGEMENT
 # ==========================================================================
@@ -290,6 +303,17 @@ def read_file_lines(path: Path) -> List[str]:
             return handle.read().splitlines(keepends=False)
     except OSError as exc:
         die(f"Failed to read '{path}': {exc}")
+
+
+def extract_context_and_target(lines: List[str]) -> tuple[List[str], List[str]]:
+    """
+    Split content into context (before marker) and target (after marker).
+    If no marker is found, context is empty and target is all lines.
+    """
+    for i, line in enumerate(lines):
+        if MEMO_START_MARKER in line:
+            return lines[:i], lines[i + 1 :]
+    return [], lines
 
 
 # ==========================================================================
@@ -377,10 +401,10 @@ def render_diff_report(
     print(HEADER_RULE, file=out)
 
 
-def summarize(
-    diff_ops, expected: Sequence[str], actual: Sequence[str], *, out: Writer = sys.stdout
+def compute_stats(
+    diff_ops, expected: Sequence[str], actual: Sequence[str]
 ) -> dict:
-    """Compute and print summary statistics. Returns the stats dict."""
+    """Compute summary statistics. Returns the stats dict."""
     total_expected = len(expected)
     total_actual = len(actual)
     matching_lines = sum(i2 - i1 for tag, i1, i2, _, _ in diff_ops if tag == "equal")
@@ -410,7 +434,7 @@ def summarize(
         zero_case=100.0 if len(actual_text) == 0 else 0.0,
     )
 
-    stats = {
+    return {
         "total_expected_lines": total_expected,
         "total_actual_lines": total_actual,
         "matching_lines": matching_lines,
@@ -423,29 +447,38 @@ def summarize(
         "char_accuracy": char_accuracy,
     }
 
+
+def print_stats(stats: dict, *, out: Writer = sys.stdout) -> None:
+    """Print summary statistics from the stats dict."""
     print(f"{ANSI_BOLD}SUMMARY{ANSI_RESET}", file=out)
     print(HEADER_RULE, file=out)
-    print(f"Total lines (expected): {total_expected:>6}", file=out)
-    print(f"Total lines (yours):    {total_actual:>6}", file=out)
-    print(f"Matching lines:         {matching_lines:>6}", file=out)
-    print(f"Changed lines:          {changed_lines:>6}", file=out)
-    print(f"Inserted lines:         {inserted_lines:>6}", file=out)
-    print(f"Deleted lines:          {deleted_lines:>6}", file=out)
+    print(f"Total lines (expected): {stats['total_expected_lines']:>6}", file=out)
+    print(f"Total lines (yours):    {stats['total_actual_lines']:>6}", file=out)
+    print(f"Matching lines:         {stats['matching_lines']:>6}", file=out)
+    print(f"Changed lines:          {stats['changed_lines']:>6}", file=out)
+    print(f"Inserted lines:         {stats['inserted_lines']:>6}", file=out)
+    print(f"Deleted lines:          {stats['deleted_lines']:>6}", file=out)
     print(file=out)
+
+    total_expected = stats["total_expected_lines"]
+    matching_lines = stats["matching_lines"]
     line_ratio = (
         f"({matching_lines}/{total_expected})"
         if total_expected
         else "(n/a)"
     )
+
+    total_expected_chars = stats["total_expected_chars"]
+    matching_chars = stats["matching_chars"]
     char_ratio = (
         f"({matching_chars}/{total_expected_chars})"
         if total_expected_chars
         else "(n/a)"
     )
-    print(f"Line accuracy:          {line_accuracy:>6.1f}% {line_ratio}", file=out)
-    print(f"Character accuracy:     {char_accuracy:>6.1f}% {char_ratio}", file=out)
+
+    print(f"Line accuracy:          {stats['line_accuracy']:>6.1f}% {line_ratio}", file=out)
+    print(f"Character accuracy:     {stats['char_accuracy']:>6.1f}% {char_ratio}", file=out)
     print(HEADER_RULE, file=out)
-    return stats
 
 
 def strip_ansi(text: str) -> str:
@@ -477,26 +510,48 @@ def compute_perfect_match(diff_ops, stats: dict) -> bool:
     )
 
 
-def prompt_try_again() -> bool:
-    """Prompt user to try again. Returns True if user wants to retry, False otherwise."""
+def show_solution_pager(content: List[str]) -> None:
+    """Display the solution content in a pager."""
+    if not content:
+        print("No solution content to display.")
+        return
+
+    text = "\n".join(content)
+    pager_cmd = os.environ.get("PAGER", "less -r")
+
+    try:
+        subprocess.run(
+            shlex.split(pager_cmd),
+            input=text.encode("utf-8"),
+            check=True,
+        )
+    except (subprocess.SubprocessError, OSError):
+        # Fallback to printing if pager fails
+        print(text)
+
+
+def prompt_next_action() -> str:
+    """
+    Prompt user for the next action.
+    Returns: 'retry', 'stop', or 'peek'.
+    """
     while True:
         try:
-            response = input("Try again? [Y/n] ").strip().lower()
+            response = input("Action? [Y(retry)/n(stop)/p(peek)] ").strip().lower()
             if response == "" or response == "y":
-                return True
+                return "retry"
             elif response == "n":
-                return False
+                return "stop"
+            elif response == "p":
+                return "peek"
             else:
-                print("Please enter Y or n")
-                continue
+                print("Please enter Y, n, or p")
         except KeyboardInterrupt:
-            # Ctrl+C - exit gracefully with code 130
-            print()  # Newline after ^C
+            print()
             raise SystemExit(130)
         except EOFError:
-            # Ctrl+D - treat as No
-            print()  # Newline for clean output
-            return False
+            print()
+            return "stop"
 
 
 # ==========================================================================
@@ -602,14 +657,24 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
 
     editor_cmd = detect_editor()
+    attempt_path = create_attempt_file(solution_path)
+
+    # Initial setup: Read solution and pre-fill
+    solution_full_lines = read_file_lines(solution_path)
+    context_lines, target_lines = extract_context_and_target(solution_full_lines)
+
+    if context_lines:
+        prefill_attempt_file(attempt_path, context_lines)
 
     while True:
-        attempt_path = create_attempt_file(solution_path)
         launch_editor(editor_cmd, attempt_path)
 
-        expected_lines = read_file_lines(solution_path)
-        actual_lines = read_file_lines(attempt_path)
-        diff_ops = compute_line_diff(expected_lines, actual_lines)
+        # Read attempt and split context
+        attempt_full_lines = read_file_lines(attempt_path)
+        _, attempt_target_lines = extract_context_and_target(attempt_full_lines)
+
+        # Diff ONLY the target parts
+        diff_ops = compute_line_diff(target_lines, attempt_target_lines)
 
         report_buffer = io.StringIO()
         tee = TeeWriter(sys.stdout, report_buffer)
@@ -618,11 +683,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             solution_path,
             attempt_path,
             diff_ops,
-            expected_lines,
-            actual_lines,
+            target_lines,
+            attempt_target_lines,
             out=tee,
         )
-        stats = summarize(diff_ops, expected_lines, actual_lines, out=tee)
+        stats = compute_stats(diff_ops, target_lines, attempt_target_lines)
+        print_stats(stats, out=tee)
         append_report_to_attempt(attempt_path, report_buffer.getvalue())
 
         perfect_match = compute_perfect_match(diff_ops, stats)
@@ -630,11 +696,30 @@ def main(argv: Sequence[str] | None = None) -> int:
         if perfect_match:
             return 0
 
-        # Not perfect - prompt to try again
-        if not prompt_try_again():
+        action = prompt_next_action()
+        if action == "stop":
             return 1
-
-        # User wants to try again - loop continues
+        elif action == "peek":
+            show_solution_pager(target_lines)
+            # After peeking, treat it like a retry: create NEW attempt file
+            attempt_path = create_attempt_file(solution_path)
+            if context_lines:
+                try:
+                    with attempt_path.open("w", encoding="utf-8") as f:
+                        f.write("\n".join(context_lines))
+                        f.write(f"\n{MEMO_START_MARKER}\n\n")
+                except OSError as exc:
+                    die(f"Failed to write context to '{attempt_path}': {exc}")
+        elif action == "retry":
+            # Create NEW attempt file and pre-fill again
+            attempt_path = create_attempt_file(solution_path)
+            if context_lines:
+                try:
+                    with attempt_path.open("w", encoding="utf-8") as f:
+                        f.write("\n".join(context_lines))
+                        f.write(f"\n{MEMO_START_MARKER}\n\n")
+                except OSError as exc:
+                    die(f"Failed to write context to '{attempt_path}': {exc}")
 
 
 if __name__ == "__main__":
