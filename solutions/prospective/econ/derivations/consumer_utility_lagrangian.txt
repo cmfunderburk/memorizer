@@ -1,0 +1,29 @@
+Cobb-Douglas Utility Maximization via Lagrangian
+
+Max U(x,y) = x^a * y^b
+s.t. px*x + py*y = I
+=== MEMO START ===
+L = x^a * y^b - λ(px*x + py*y - I)
+
+FOCs:
+1. ∂L/∂x = a*x^(a-1)*y^b - λ*px = 0
+2. ∂L/∂y = b*x^a*y^(b-1) - λ*py = 0
+3. ∂L/∂λ = px*x + py*y - I = 0
+
+Divide (1) by (2):
+(a*x^(a-1)*y^b) / (b*x^a*y^(b-1)) = px / py
+(a/b) * (y/x) = px / py
+
+Rearrange for y:
+y = (b/a) * (px/py) * x
+
+Substitute into (3):
+px*x + py*((b/a)*(px/py)*x) = I
+px*x + (b/a)*px*x = I
+x * px * (1 + b/a) = I
+x * px * ((a+b)/a) = I
+
+Demand functions:
+x* = (a / (a+b)) * (I / px)
+y* = (b / (a+b)) * (I / py)
+
