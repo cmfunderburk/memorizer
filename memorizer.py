@@ -143,8 +143,8 @@ def list_contents(directory: Path) -> List[Path]:
     return dirs + files
 
 
-def interactive_select(start_dir: Path) -> Path:
-    """Prompt user to select a solution from the directory structure."""
+def _select_nested(start_dir: Path) -> Path:
+    """Prompt user to select a solution from the directory structure using nested navigation."""
     current_dir = start_dir.resolve()
     root_dir = SOLUTIONS_ROOT.resolve()
 
@@ -209,6 +209,66 @@ def interactive_select(start_dir: Path) -> Path:
             print()
             sys.exit(130)
 
+
+def _select_with_fzf(start_dir: Path) -> Path:
+    """Use fzf to select a solution file with fuzzy finding."""
+    root = SOLUTIONS_ROOT.resolve()
+    
+    # Collect all solution files
+    files = []
+    for path in root.rglob("*"):
+        if path.is_file() and not path.name.startswith("."):
+            try:
+                rel = path.relative_to(root)
+                files.append((str(rel), path))
+            except ValueError:
+                continue
+    
+    if not files:
+        die(f"No solutions found in {SOLUTIONS_ROOT}")
+    
+    # Format for fzf: one path per line
+    input_text = "\n".join(rel for rel, _ in files)
+    
+    # Run fzf with minimal flags
+    cmd = ["fzf", "--height=40%", "--reverse"]
+    
+    try:
+        result = subprocess.run(
+            cmd,
+            input=input_text.encode("utf-8"),
+            capture_output=True,
+            check=True,
+        )
+    except subprocess.CalledProcessError:
+        # User cancelled (Ctrl-C or Esc)
+        raise SystemExit(130)
+    except FileNotFoundError:
+        # fzf binary not found
+        raise ValueError("fzf command not found")
+    
+    selected_rel = result.stdout.decode("utf-8").strip()
+    if not selected_rel:
+        raise ValueError("No selection made")
+    
+    # Find corresponding absolute path
+    for rel, abs_path in files:
+        if rel == selected_rel:
+            return abs_path
+    
+    raise ValueError(f"Selected path '{selected_rel}' not found")
+
+
+def interactive_select(start_dir: Path) -> Path:
+    """Select a solution file: fzf if available, else nested navigation."""
+    if shutil.which("fzf"):
+        try:
+            return _select_with_fzf(start_dir)
+        except (subprocess.SubprocessError, ValueError):
+            print("fzf selection failed; using nested navigation")
+    else:
+        print("Using nested navigation (install fzf for faster selection)")
+    return _select_nested(start_dir)
 
 
 def get_next_attempt_path(solution_path: Path) -> Path:

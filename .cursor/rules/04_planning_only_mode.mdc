@@ -35,5 +35,5 @@ There are costs to implementing the wrong solution, e.g.:
 When in planning mode:
 - ❌ DO NOT: Write to existing code files.
 - ✅ DO use: read_file, grep, codebase_search, list_dir, web_search
-- ✅ DO: Create planning documents, discuss architecture, clarify requirements. Planning documents always go in docs/planning/CURRENT/
+- ✅ DO: Create planning documents, discuss architecture, clarify requirements. Planning documents always go in docs/planning/
 - ✅ DO: Ask clarifying questions before making assumptions
