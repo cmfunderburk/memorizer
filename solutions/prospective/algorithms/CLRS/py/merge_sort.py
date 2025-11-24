@@ -7,22 +7,22 @@ Space Complexity: O(n)
 Divide and conquer algorithm. Guaranteed O(n log n) performance.
 """
 === MEMO START ===
-def merge(L, R):
+def merge(left, right):
     merged = []
     i = 0
     j = 0
-    while i < len(L) and j < len(R):
-        if L[i] <= R[j]:
-            merged.append(L[i])
+    while i < len(left) and j < len(right):
+        if left[i] <= right[j]:
+            merged.append(left[i])
             i += 1
         else:
-            merged.append(R[j])
+            merged.append(right[j])
             j += 1
-    while i < len(L):
-        merged.append(L[i])
+    while i < len(left):
+        merged.append(left[i])
         i += 1
-    while j < len(R):
-        merged.append(R[j])
+    while j < len(right):
+        merged.append(right[j])
         j += 1
     return merged
 
@@ -30,7 +30,6 @@ def merge_sort(arr):
     if len(arr) < 2:
         return arr
     mid = len(arr) // 2
-    L = merge_sort(arr[:mid])
-    R = merge_sort(arr[mid:])
-    return merge(L, R)
-
+    left = merge_sort(arr[:mid])
+    right = merge_sort(arr[mid:])
+    return merge(left, right)

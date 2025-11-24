@@ -25,10 +25,10 @@ python3 memorizer.py solutions/insertion_sort.py --stats
 
 ### Interactive Selection
 
-When invoked without a solution path, MEMORIZER uses intelligent file selection:
+When invoked without a solution path, MEMORIZER uses:
 
-1. **fzf mode** (if installed): Fuzzy-find any solution file instantly with type-ahead search
-2. **Nested navigation** (fallback): Browse directories interactively with numbered menus
+1. **fzf** (if installed): Fuzzy-find any solution file instantly with type-ahead search
+2. **Nested navigation**: Browse directories interactively with numbered menus
    - Enter a number or exact filename to select
    - Navigate into directories, use `..` to go back
    - Files display without trailing `/`, directories with `/`
