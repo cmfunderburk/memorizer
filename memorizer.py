@@ -33,6 +33,10 @@ ANSI_RED_BG = "\033[41m"
 ANSI_GREEN_BG = "\033[42m"
 ANSI_RESET = "\033[0m"
 ANSI_BOLD = "\033[1m"
+ANSI_GREEN = "\033[32m"
+ANSI_YELLOW = "\033[33m"
+ANSI_BRIGHT_GREEN = "\033[92m"
+ANSI_BRIGHT_YELLOW = "\033[93m"
 HEADER_RULE = "=" * 40
 MEMO_START_MARKER = "=== MEMO START ==="
 
@@ -397,6 +401,14 @@ def extract_context_and_target(lines: List[str]) -> tuple[List[str], List[str]]:
     return [], lines
 
 
+def strip_trailing_blank_lines(lines: List[str]) -> List[str]:
+    """Remove trailing blank lines from a list of lines."""
+    result = lines[:]
+    while result and result[-1].strip() == "":
+        result.pop()
+    return result
+
+
 # ==========================================================================
 # DIFF COMPUTATION
 # ==========================================================================
@@ -645,13 +657,40 @@ def prompt_next_action(*, allow_quit: bool = False) -> str:
             return "stop"
 
 
+def prompt_continue_after_perfect(next_solution: Path | None) -> Literal["continue", "quit"]:
+    """
+    Prompt user after perfect recall to continue with next solution or quit.
+    Returns: 'continue' or 'quit'.
+    """
+    while True:
+        try:
+            if next_solution is not None:
+                prompt = f"Next solution: {next_solution.name}\nContinue? [Y(continue)/q(quit)] "
+            else:
+                prompt = "All solutions completed!\nQuit? [Y/q(quit)] "
+            response = input(prompt).strip().lower()
+            if response == "" or response == "y":
+                return "continue"
+            elif response in {"q", "quit"}:
+                return "quit"
+            else:
+                print("Please enter Y or q")
+        except KeyboardInterrupt:
+            print()
+            raise SystemExit(130)
+        except EOFError:
+            print()
+            return "quit"
+
+
 def run_drill(
     solution_path: Path, *, allow_quit: bool = False
 ) -> Literal["perfect", "stopped", "quit"]:
     """Run the full drill loop for a solution and return its outcome."""
     editor_cmd = detect_editor()
     solution_full_lines = read_file_lines(solution_path)
-    context_lines, target_lines = extract_context_and_target(solution_full_lines)
+    context_lines, target_lines_raw = extract_context_and_target(solution_full_lines)
+    target_lines = strip_trailing_blank_lines(target_lines_raw)
 
     def fresh_attempt() -> Path:
         attempt = create_attempt_file(solution_path)
@@ -665,18 +704,25 @@ def run_drill(
         launch_editor(editor_cmd, attempt_path)
 
         attempt_full_lines = read_file_lines(attempt_path)
-        _, attempt_target_lines = extract_context_and_target(attempt_full_lines)
+        _, attempt_target_lines_raw = extract_context_and_target(attempt_full_lines)
+        attempt_target_lines = strip_trailing_blank_lines(attempt_target_lines_raw)
 
         diff_ops = compute_line_diff(target_lines, attempt_target_lines)
         stats = compute_stats(diff_ops, target_lines, attempt_target_lines)
 
         if compute_perfect_match(diff_ops, stats):
-            message = (
-                f"*** Perfect recall: {solution_path.name} matches exactly "
+            plain_message = (
+                f"Perfect recall: {solution_path.name} matches exactly "
                 f"({attempt_path.name})."
             )
-            print(message)
-            append_report_to_attempt(attempt_path, message)
+            banner_width = len(plain_message) + 6
+            border = "═" * banner_width
+            print()
+            print(f"{ANSI_BOLD}{ANSI_BRIGHT_GREEN}╔{border}╗{ANSI_RESET}")
+            print(f"{ANSI_BOLD}{ANSI_BRIGHT_GREEN}║{ANSI_RESET}   {ANSI_BOLD}{ANSI_BRIGHT_YELLOW}★{ANSI_RESET} {ANSI_BOLD}{plain_message}{ANSI_RESET} {ANSI_BOLD}{ANSI_BRIGHT_YELLOW}★{ANSI_RESET}   {ANSI_BOLD}{ANSI_BRIGHT_GREEN}║{ANSI_RESET}")
+            print(f"{ANSI_BOLD}{ANSI_BRIGHT_GREEN}╚{border}╝{ANSI_RESET}")
+            print()
+            append_report_to_attempt(attempt_path, plain_message)
             return "perfect"
 
         report_buffer = io.StringIO()
@@ -720,6 +766,15 @@ def run_focus_session(files: list[Path]) -> int:
         outcome = run_drill(solution_path, allow_quit=True)
         if outcome == "quit":
             return 2
+        elif outcome == "perfect":
+            # After perfect recall, show celebration and prompt for next action
+            print()  # Add spacing after celebration message
+            next_idx = idx  # Current index (0-based after enumerate)
+            next_solution = queue[next_idx] if next_idx < len(queue) else None
+            action = prompt_continue_after_perfect(next_solution)
+            if action == "quit":
+                return 2
+            # Continue to next iteration
 
     return 0
 # ==========================================================================

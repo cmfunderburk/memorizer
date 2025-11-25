@@ -1,0 +1,78 @@
+<HighLevelDetails>
+
+- **Summary**: MEMORIZER is a standalone Python CLI tool for practicing code recall. It presents a canonical "solution" file, opens a blank "attempt" file in the user's editor ($VISUAL/$EDITOR), and upon exit, generates a strict line-by-line and character-level diff report. It tracks history and statistics by parsing appended reports in attempt files.
+- **Project Type**: Python CLI application.
+- **Languages**: Python 3.10+.
+- **Dependencies**: Standard library only. No `requirements.txt` or `setup.py`.
+- **Optional External Tools**: 
+  - `fzf`: For interactive fuzzy file selection.
+  - `nvim`/`vim`/`vi`: Default editor fallbacks.
+  - `less`: Default pager for "peek" mode.
+
+</HighLevelDetails>
+
+<BuildInstructions>
+
+- **Run Application**: 
+  `python3 memorizer.py [path/to/solution]`
+  - Interactive mode: `python3 memorizer.py` (uses `fzf` or nested menu).
+  - Stats mode: `python3 memorizer.py path/to/solution --stats`.
+
+- **Validate Changes (Testing)**:
+  Since there is no unit test suite, validation is performed by simulating editor interaction using `tee`.
+  
+  1. **Validate Perfect Recall (Exit Code 0)**:
+     This pipes the correct solution directly into the attempt file.
+     ```bash
+     cat solutions/algorithms/CLRS/insertion_sort.py | EDITOR=/usr/bin/tee python3 memorizer.py solutions/algorithms/CLRS/insertion_sort.py
+     ```
+     *Precondition*: `solutions/algorithms/CLRS/insertion_sort.py` must exist.
+     *Success*: Output includes "*** Perfect recall" and exit code is 0.
+  
+  2. **Validate Incorrect Recall (Exit Code 1)**:
+     This simulates an incorrect attempt.
+     ```bash
+     printf "def incorrect():\n    pass\n" | EDITOR=/usr/bin/tee python3 memorizer.py solutions/algorithms/CLRS/insertion_sort.py
+     ```
+     *Success*: Output shows diff report and exit code is 1.
+
+  3. **Focus Mode**:
+     `python3 memorizer.py --focus` runs drills for files in `solutions/focus/`.
+
+- **Linting**:
+  - No explicit linter configuration exists. Follow PEP 8 standards.
+  - Check for syntax errors: `python3 -m py_compile memorizer.py`.
+
+- **Environment Setup**:
+  - Ensure `PYTHONPATH` includes the root if running from subdirectories (though usually not required as the script is standalone).
+  - `attempts/` directory is automatically created; do not commit files there.
+
+</BuildInstructions>
+
+<ProjectLayout>
+
+- **Core File**:
+  - `memorizer.py`: The entire application logic (~800 lines). Contains CLI parsing, file I/O, diff calculation, stats parsing, and UI rendering.
+
+- **Directory Structure**:
+  - `solutions/`: Contains the canonical source code for memorization practice.
+    - `algorithms/CLRS/`: Algorithms from the CLRS textbook (e.g., `insertion_sort.py`).
+    - `focus/`: Symbolic links or copies of solutions currently being focused on.
+  - `attempts/`: (Gitignored) Stores user attempts named `filename-N.ext`.
+  - `docs/`: Documentation and planning artifacts.
+    - `planning/CURRENT/consolidated_quick_wins.md`: Current roadmap for `memorizer.py` refactoring.
+
+- **Configuration**:
+  - No external configuration files. Configuration (editor detection, paths) is hardcoded or uses environment variables (`$EDITOR`, `$PAGER`).
+
+- **Key Logic Locations in `memorizer.py`**:
+  - `run_drill()`: Main loop for a single practice session.
+  - `compute_line_diff()` / `render_char_diff()`: Logic for comparison and ANSI output.
+  - `get_attempt_history()`: Parses stats from regex matches in attempt files.
+  - `MEMO_START_MARKER` ("=== MEMO START ==="): Delimiter in solution files separating context (pre-filled) from target code (to be memorized).
+
+- **Validation Pipelines**:
+  - None. Manual validation via the `tee` command is the standard procedure.
+
+</ProjectLayout>
+

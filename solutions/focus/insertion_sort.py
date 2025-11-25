@@ -16,4 +16,3 @@ def insertion_sort(arr):
             j -= 1
         arr[j] = key
     return arr
-

@@ -7,7 +7,7 @@ Space Complexity: O(log n) stack
 In-place sorting using divide and conquer.
 """
 === MEMO START ===
-def partition(arr, low, high):
+def partition_lomuto(arr, low, high):
     pivot = arr[high]
     i = low - 1
     for j in range(low, high):
@@ -19,6 +19,6 @@ def partition(arr, low, high):
 
 def quick_sort(arr, low, high):
     if low < high:
-        p = partition(arr, low, high)
+        p = partition_lomuto(arr, low, high)
         quick_sort(arr, low, p - 1)
         quick_sort(arr, p + 1, high)

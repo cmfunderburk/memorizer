@@ -7,11 +7,10 @@ Space Complexity: O(log n) stack
 Hoare's partition is generally more efficient than Lomuto's (fewer swaps).
 """
 === MEMO START ===
-def partition(arr, low, high):
+def partition_hoare(arr, low, high):
     pivot = arr[low]
     i = low - 1
     j = high + 1
-    
     while True:
         i += 1
         while arr[i] < pivot:
@@ -25,6 +24,6 @@ def partition(arr, low, high):
 
 def quick_sort(arr, low, high):
     if low < high:
-        p = partition(arr, low, high)
+        p = partition_hoare(arr, low, high)
         quick_sort(arr, low, p)
         quick_sort(arr, p + 1, high)
