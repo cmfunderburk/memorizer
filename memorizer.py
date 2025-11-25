@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import io
 import os
+import random
 import re
 import shlex
 import shutil
@@ -13,7 +14,7 @@ import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
-from typing import List, NoReturn, Protocol, Sequence
+from typing import List, Literal, NoReturn, Protocol, Sequence
 
 from difflib import SequenceMatcher
 
@@ -25,6 +26,7 @@ BASE_DIR = Path(__file__).resolve().parent
 SOLUTIONS_DIR = Path("solutions")
 ATTEMPTS_DIR = Path("attempts")
 SOLUTIONS_ROOT = BASE_DIR / SOLUTIONS_DIR
+FOCUS_DIR = SOLUTIONS_ROOT / "focus"
 ATTEMPTS_ROOT = BASE_DIR / ATTEMPTS_DIR
 DEFAULT_EDITORS: Sequence[str] = ("nvim", "vim", "vi")
 ANSI_RED_BG = "\033[41m"
@@ -88,6 +90,11 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Show progress statistics for the selected solution instead of starting a new attempt.",
     )
+    parser.add_argument(
+        "--focus",
+        action="store_true",
+        help="Run drills for every solution under solutions/focus/ in random order.",
+    )
     return parser.parse_args(argv)
 
 
@@ -141,6 +148,20 @@ def list_contents(directory: Path) -> List[Path]:
     dirs = sorted([p for p in items if p.is_dir()], key=lambda p: p.name)
     files = sorted([p for p in items if p.is_file()], key=lambda p: p.name)
     return dirs + files
+
+
+def collect_focus_files() -> list[Path]:
+    """Return readable, non-hidden files in the focus directory (non-recursive)."""
+    if not FOCUS_DIR.exists() or not FOCUS_DIR.is_dir():
+        return []
+
+    files: list[Path] = []
+    for path in FOCUS_DIR.iterdir():
+        if path.name.startswith("."):
+            continue
+        if path.is_file() and os.access(path, os.R_OK):
+            files.append(path.resolve())
+    return sorted(files, key=lambda p: p.name.lower())
 
 
 def _select_nested(start_dir: Path) -> Path:
@@ -590,22 +611,32 @@ def show_solution_pager(content: List[str]) -> None:
         print(text)
 
 
-def prompt_next_action() -> str:
+def prompt_next_action(*, allow_quit: bool = False) -> str:
     """
     Prompt user for the next action.
-    Returns: 'retry', 'stop', or 'peek'.
+    Returns: 'retry', 'stop', 'peek', or 'quit'.
     """
     while True:
         try:
-            response = input("Action? [Y(retry)/n(stop)/p(peek)] ").strip().lower()
+            prompt = "Action? [Y(retry)/n(stop)/p(peek)"
+            if allow_quit:
+                prompt += "/q(quit)"
+            prompt += "] "
+            response = input(prompt).strip().lower()
             if response == "" or response == "y":
                 return "retry"
             elif response == "n":
                 return "stop"
             elif response == "p":
                 return "peek"
+            elif allow_quit and response in {"q", "quit"}:
+                return "quit"
             else:
-                print("Please enter Y, n, or p")
+                print("Please enter Y, n, p", end="")
+                if allow_quit:
+                    print(", or q")
+                else:
+                    print()
         except KeyboardInterrupt:
             print()
             raise SystemExit(130)
@@ -614,6 +645,83 @@ def prompt_next_action() -> str:
             return "stop"
 
 
+def run_drill(
+    solution_path: Path, *, allow_quit: bool = False
+) -> Literal["perfect", "stopped", "quit"]:
+    """Run the full drill loop for a solution and return its outcome."""
+    editor_cmd = detect_editor()
+    solution_full_lines = read_file_lines(solution_path)
+    context_lines, target_lines = extract_context_and_target(solution_full_lines)
+
+    def fresh_attempt() -> Path:
+        attempt = create_attempt_file(solution_path)
+        if context_lines:
+            prefill_attempt_file(attempt, context_lines)
+        return attempt
+
+    attempt_path = fresh_attempt()
+
+    while True:
+        launch_editor(editor_cmd, attempt_path)
+
+        attempt_full_lines = read_file_lines(attempt_path)
+        _, attempt_target_lines = extract_context_and_target(attempt_full_lines)
+
+        diff_ops = compute_line_diff(target_lines, attempt_target_lines)
+        stats = compute_stats(diff_ops, target_lines, attempt_target_lines)
+
+        if compute_perfect_match(diff_ops, stats):
+            message = (
+                f"*** Perfect recall: {solution_path.name} matches exactly "
+                f"({attempt_path.name})."
+            )
+            print(message)
+            append_report_to_attempt(attempt_path, message)
+            return "perfect"
+
+        report_buffer = io.StringIO()
+        tee = TeeWriter(sys.stdout, report_buffer)
+        render_diff_report(
+            solution_path,
+            attempt_path,
+            diff_ops,
+            target_lines,
+            attempt_target_lines,
+            out=tee,
+        )
+        print_stats(stats, out=tee)
+        append_report_to_attempt(attempt_path, report_buffer.getvalue())
+
+        action = prompt_next_action(allow_quit=allow_quit)
+        if action == "stop":
+            return "stopped"
+        if action == "quit":
+            return "quit"
+        if action == "peek":
+            show_solution_pager(target_lines)
+            attempt_path = fresh_attempt()
+            continue
+        if action == "retry":
+            attempt_path = fresh_attempt()
+            continue
+
+
+def run_focus_session(files: list[Path]) -> int:
+    """Run focus drills sequentially, honoring quit requests with exit code 2."""
+    if not files:
+        return 0
+
+    queue = files[:]
+    random.shuffle(queue)
+    total = len(queue)
+
+    for idx, solution_path in enumerate(queue, start=1):
+        print(f"[{idx}/{total}] {solution_path.name}")
+        outcome = run_drill(solution_path, allow_quit=True)
+        if outcome == "quit":
+            return 2
+
+    return 0
 # ==========================================================================
 # STATS & HISTORY
 # ==========================================================================
@@ -706,80 +814,35 @@ def render_stats(solution_path: Path, history: List[dict]) -> None:
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
 
+    if args.stats and args.focus:
+        die("--stats cannot be combined with --focus.")
+
+    solution_path: Path | None = None
     if args.solution:
         solution_path = validate_solution_path(args.solution)
-    else:
-        solution_path = interactive_select(SOLUTIONS_ROOT)
 
     if args.stats:
+        if solution_path is None:
+            solution_path = interactive_select(SOLUTIONS_ROOT)
         history = get_attempt_history(solution_path)
         render_stats(solution_path, history)
         return 0
 
-    editor_cmd = detect_editor()
-    attempt_path = create_attempt_file(solution_path)
+    exit_codes: dict[str, int] = {"perfect": 0, "stopped": 1, "quit": 2}
 
-    # Initial setup: Read solution and pre-fill
-    solution_full_lines = read_file_lines(solution_path)
-    context_lines, target_lines = extract_context_and_target(solution_full_lines)
+    if solution_path is not None:
+        result = run_drill(solution_path)
+        return exit_codes[result]
 
-    if context_lines:
-        prefill_attempt_file(attempt_path, context_lines)
+    if args.focus:
+        focus_files = collect_focus_files()
+        if not focus_files:
+            die(f"No readable solutions found under '{FOCUS_DIR}'.")
+        return run_focus_session(focus_files)
 
-    while True:
-        launch_editor(editor_cmd, attempt_path)
-
-        # Read attempt and split context
-        attempt_full_lines = read_file_lines(attempt_path)
-        _, attempt_target_lines = extract_context_and_target(attempt_full_lines)
-
-        # Diff ONLY the target parts
-        diff_ops = compute_line_diff(target_lines, attempt_target_lines)
-
-        report_buffer = io.StringIO()
-        tee = TeeWriter(sys.stdout, report_buffer)
-
-        render_diff_report(
-            solution_path,
-            attempt_path,
-            diff_ops,
-            target_lines,
-            attempt_target_lines,
-            out=tee,
-        )
-        stats = compute_stats(diff_ops, target_lines, attempt_target_lines)
-        print_stats(stats, out=tee)
-        append_report_to_attempt(attempt_path, report_buffer.getvalue())
-
-        perfect_match = compute_perfect_match(diff_ops, stats)
-
-        if perfect_match:
-            return 0
-
-        action = prompt_next_action()
-        if action == "stop":
-            return 1
-        elif action == "peek":
-            show_solution_pager(target_lines)
-            # After peeking, treat it like a retry: create NEW attempt file
-            attempt_path = create_attempt_file(solution_path)
-            if context_lines:
-                try:
-                    with attempt_path.open("w", encoding="utf-8") as f:
-                        f.write("\n".join(context_lines))
-                        f.write(f"\n{MEMO_START_MARKER}\n\n")
-                except OSError as exc:
-                    die(f"Failed to write context to '{attempt_path}': {exc}")
-        elif action == "retry":
-            # Create NEW attempt file and pre-fill again
-            attempt_path = create_attempt_file(solution_path)
-            if context_lines:
-                try:
-                    with attempt_path.open("w", encoding="utf-8") as f:
-                        f.write("\n".join(context_lines))
-                        f.write(f"\n{MEMO_START_MARKER}\n\n")
-                except OSError as exc:
-                    die(f"Failed to write context to '{attempt_path}': {exc}")
+    solution_path = interactive_select(SOLUTIONS_ROOT)
+    result = run_drill(solution_path)
+    return exit_codes[result]
 
 
 if __name__ == "__main__":
