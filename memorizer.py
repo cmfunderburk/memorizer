@@ -39,7 +39,6 @@ ANSI_YELLOW = "\033[33m"
 ANSI_BRIGHT_GREEN = "\033[92m"
 ANSI_BRIGHT_YELLOW = "\033[93m"
 HEADER_RULE = "=" * 40
-MEMO_START_MARKER = "=== MEMO START ==="
 INFO_MARKER = "<!-- INFO -->"
 
 # Regex for fenced code blocks: ```lang\ncontent\n```
@@ -467,21 +466,15 @@ def interactive_select(start_dir: Path) -> Path:
     return _select_nested(start_dir)
 
 
-def get_next_attempt_path(solution_path: Path, *, markdown: bool = False) -> Path:
+def get_next_attempt_path(solution_path: Path) -> Path:
     """Determine the next numbered attempt filename for the solution."""
     ATTEMPTS_ROOT.mkdir(exist_ok=True)
     basename = solution_path.stem or solution_path.name
     
-    # For markdown solutions, use .attempt.md extension
-    if markdown or solution_path.suffix == ".md":
-        suffix = ".attempt.md"
-        pattern = f"{basename}-*.attempt.md"
-        # Match basename-N where N is a number, before .attempt.md
-        regex = re.compile(rf"{re.escape(basename)}-(\d+)\.attempt$")
-    else:
-        suffix = solution_path.suffix
-        pattern = f"{basename}-*{suffix}" if suffix else f"{basename}-*"
-        regex = re.compile(rf"{re.escape(basename)}-(\d+)$")
+    suffix = ".attempt.md"
+    pattern = f"{basename}-*.attempt.md"
+    # Match basename-N where N is a number, before .attempt.md
+    regex = re.compile(rf"{re.escape(basename)}-(\d+)\.attempt$")
 
     highest = 0
     for path in ATTEMPTS_ROOT.glob(pattern):
@@ -493,31 +486,6 @@ def get_next_attempt_path(solution_path: Path, *, markdown: bool = False) -> Pat
     return ATTEMPTS_ROOT / f"{basename}-{next_number}{suffix}"
 
 
-def create_attempt_file(solution_path: Path) -> Path:
-    """Create the next attempt file on disk, ensuring unique numbering."""
-    while True:
-        attempt_path = get_next_attempt_path(solution_path)
-        try:
-            with attempt_path.open("x", encoding="utf-8"):
-                pass
-            return attempt_path
-        except FileExistsError:
-            # A concurrent process created this attempt number; try the next one.
-            continue
-
-
-def prefill_attempt_file(attempt_path: Path, context_lines: List[str]) -> None:
-    """Write context header to a new attempt file."""
-    if not context_lines:
-        return
-    try:
-        with attempt_path.open("w", encoding="utf-8") as f:
-            f.write("\n".join(context_lines))
-            f.write(f"\n{MEMO_START_MARKER}\n\n")
-    except OSError as exc:
-        die(f"Failed to write context to '{attempt_path}': {exc}")
-
-
 def prefill_markdown_attempt(attempt_path: Path, template: str) -> None:
     """Write markdown template with placeholders to attempt file."""
     try:
@@ -525,13 +493,6 @@ def prefill_markdown_attempt(attempt_path: Path, template: str) -> None:
             f.write(template)
     except OSError as exc:
         die(f"Failed to write template to '{attempt_path}': {exc}")
-
-
-def detect_format(path: Path) -> Literal["markdown", "legacy"]:
-    """Detect solution file format based on extension."""
-    if path.suffix == ".md":
-        return "markdown"
-    return "legacy"
 
 
 # ==========================================================================
@@ -570,30 +531,6 @@ def launch_editor(editor_cmd: Sequence[str], attempt_path: Path) -> None:
         die(f"Editor exited with code {exc.returncode}.")
     except OSError as exc:
         die(f"Failed to launch editor: {exc}")
-
-
-# ==========================================================================
-# FILE READING HELPERS
-# ==========================================================================
-
-def read_file_lines(path: Path) -> List[str]:
-    """Read a file using UTF-8 and return a list of lines without newlines."""
-    try:
-        with path.open("r", encoding="utf-8") as handle:
-            return handle.read().splitlines(keepends=False)
-    except OSError as exc:
-        die(f"Failed to read '{path}': {exc}")
-
-
-def extract_context_and_target(lines: List[str]) -> tuple[List[str], List[str]]:
-    """
-    Split content into context (before marker) and target (after marker).
-    If no marker is found, context is empty and target is all lines.
-    """
-    for i, line in enumerate(lines):
-        if MEMO_START_MARKER in line:
-            return lines[:i], lines[i + 1 :]
-    return [], lines
 
 
 def strip_trailing_blank_lines(lines: List[str]) -> List[str]:
@@ -642,53 +579,6 @@ def render_char_diff(expected: str, actual: str) -> tuple[str, str]:
 # OUTPUT RENDERING & STATS
 # ==========================================================================
 
-def render_diff_report(
-    solution_path: Path,
-    attempt_path: Path,
-    diff_ops,
-    expected: Sequence[str],
-    actual: Sequence[str],
-    *,
-    out: Writer = sys.stdout,
-) -> None:
-    """Print the full diff report with headers and inline highlights."""
-    print(HEADER_RULE, file=out)
-    print(f"{ANSI_BOLD}MEMORIZATION CHECK:{ANSI_RESET} {solution_path.name}", file=out)
-    print(f"Attempt: {attempt_path.name}", file=out)
-    print(HEADER_RULE, file=out)
-
-    for tag, i1, i2, j1, j2 in diff_ops:
-        if tag == "equal":
-            for idx in range(i1, i2):
-                line_no = idx + 1
-                print(f" {line_no:>4}  {expected[idx]}", file=out)
-        elif tag == "replace":
-            exp_block = expected[i1:i2]
-            act_block = actual[j1:j2]
-            max_block = max(len(exp_block), len(act_block))
-            for offset in range(max_block):
-                exp_line = exp_block[offset] if offset < len(exp_block) else ""
-                act_line = act_block[offset] if offset < len(act_block) else ""
-                colored_exp, colored_act = render_char_diff(exp_line, act_line)
-                if offset < len(exp_block):
-                    exp_no = i1 + offset + 1
-                    print(f"-{exp_no:>4}  {colored_exp}", file=out)
-                if offset < len(act_block):
-                    act_no = j1 + offset + 1
-                    print(f"+{act_no:>4}  {colored_act}", file=out)
-        elif tag == "delete":
-            for idx in range(i1, i2):
-                exp_line = expected[idx]
-                colored_exp, _ = render_char_diff(exp_line, "")
-                print(f"-{idx + 1:>4}  {colored_exp}", file=out)
-        elif tag == "insert":
-            for idx in range(j1, j2):
-                _, colored_act = render_char_diff("", actual[idx])
-                print(f"+{idx + 1:>4}  {colored_act}", file=out)
-
-    print(HEADER_RULE, file=out)
-
-
 def compute_stats(
     diff_ops, expected: Sequence[str], actual: Sequence[str]
 ) -> dict:
@@ -734,39 +624,6 @@ def compute_stats(
         "total_expected_chars": total_expected_chars,
         "char_accuracy": char_accuracy,
     }
-
-
-def print_stats(stats: dict, *, out: Writer = sys.stdout) -> None:
-    """Print summary statistics from the stats dict."""
-    print(f"{ANSI_BOLD}SUMMARY{ANSI_RESET}", file=out)
-    print(HEADER_RULE, file=out)
-    print(f"Total lines (expected): {stats['total_expected_lines']:>6}", file=out)
-    print(f"Total lines (yours):    {stats['total_actual_lines']:>6}", file=out)
-    print(f"Matching lines:         {stats['matching_lines']:>6}", file=out)
-    print(f"Changed lines:          {stats['changed_lines']:>6}", file=out)
-    print(f"Inserted lines:         {stats['inserted_lines']:>6}", file=out)
-    print(f"Deleted lines:          {stats['deleted_lines']:>6}", file=out)
-    print(file=out)
-
-    total_expected = stats["total_expected_lines"]
-    matching_lines = stats["matching_lines"]
-    line_ratio = (
-        f"({matching_lines}/{total_expected})"
-        if total_expected
-        else "(n/a)"
-    )
-
-    total_expected_chars = stats["total_expected_chars"]
-    matching_chars = stats["matching_chars"]
-    char_ratio = (
-        f"({matching_chars}/{total_expected_chars})"
-        if total_expected_chars
-        else "(n/a)"
-    )
-
-    print(f"Line accuracy:          {stats['line_accuracy']:>6.1f}% {line_ratio}", file=out)
-    print(f"Character accuracy:     {stats['char_accuracy']:>6.1f}% {char_ratio}", file=out)
-    print(HEADER_RULE, file=out)
 
 
 def strip_ansi(text: str) -> str:
@@ -948,7 +805,7 @@ def prompt_continue_after_perfect(next_solution: Path | None) -> Literal["contin
             return "quit"
 
 
-def run_markdown_drill(
+def run_drill(
     solution_path: Path, *, allow_quit: bool = False
 ) -> Literal["perfect", "stopped", "quit"]:
     """Run drill loop for markdown solutions with multi-block support."""
@@ -965,7 +822,7 @@ def run_markdown_drill(
     template = render_attempt_template(parsed_solution)
     
     def fresh_attempt() -> Path:
-        attempt = get_next_attempt_path(solution_path, markdown=True)
+        attempt = get_next_attempt_path(solution_path)
         # Create the file
         attempt.touch()
         prefill_markdown_attempt(attempt, template)
@@ -1039,79 +896,6 @@ def run_markdown_drill(
             continue
 
 
-def run_drill(
-    solution_path: Path, *, allow_quit: bool = False
-) -> Literal["perfect", "stopped", "quit"]:
-    """Run the full drill loop for a solution and return its outcome."""
-    # Route to markdown drill if appropriate
-    if detect_format(solution_path) == "markdown":
-        return run_markdown_drill(solution_path, allow_quit=allow_quit)
-    
-    editor_cmd = detect_editor()
-    solution_full_lines = read_file_lines(solution_path)
-    context_lines, target_lines_raw = extract_context_and_target(solution_full_lines)
-    target_lines = strip_trailing_blank_lines(target_lines_raw)
-
-    def fresh_attempt() -> Path:
-        attempt = create_attempt_file(solution_path)
-        if context_lines:
-            prefill_attempt_file(attempt, context_lines)
-        return attempt
-
-    attempt_path = fresh_attempt()
-
-    while True:
-        launch_editor(editor_cmd, attempt_path)
-
-        attempt_full_lines = read_file_lines(attempt_path)
-        _, attempt_target_lines_raw = extract_context_and_target(attempt_full_lines)
-        attempt_target_lines = strip_trailing_blank_lines(attempt_target_lines_raw)
-
-        diff_ops = compute_line_diff(target_lines, attempt_target_lines)
-        stats = compute_stats(diff_ops, target_lines, attempt_target_lines)
-
-        if compute_perfect_match(diff_ops, stats):
-            plain_message = (
-                f"Perfect recall: {solution_path.name} matches exactly "
-                f"({attempt_path.name})."
-            )
-            banner_width = len(plain_message) + 6
-            border = "═" * banner_width
-            print()
-            print(f"{ANSI_BOLD}{ANSI_BRIGHT_GREEN}╔{border}╗{ANSI_RESET}")
-            print(f"{ANSI_BOLD}{ANSI_BRIGHT_GREEN}║{ANSI_RESET}   {ANSI_BOLD}{ANSI_BRIGHT_YELLOW}★{ANSI_RESET} {ANSI_BOLD}{plain_message}{ANSI_RESET} {ANSI_BOLD}{ANSI_BRIGHT_YELLOW}★{ANSI_RESET}   {ANSI_BOLD}{ANSI_BRIGHT_GREEN}║{ANSI_RESET}")
-            print(f"{ANSI_BOLD}{ANSI_BRIGHT_GREEN}╚{border}╝{ANSI_RESET}")
-            print()
-            append_report_to_attempt(attempt_path, plain_message)
-            return "perfect"
-
-        report_buffer = io.StringIO()
-        tee = TeeWriter(sys.stdout, report_buffer)
-        render_diff_report(
-            solution_path,
-            attempt_path,
-            diff_ops,
-            target_lines,
-            attempt_target_lines,
-            out=tee,
-        )
-        print_stats(stats, out=tee)
-        append_report_to_attempt(attempt_path, report_buffer.getvalue())
-
-        action = prompt_next_action(allow_quit=allow_quit)
-        if action == "stop":
-            return "stopped"
-        if action == "quit":
-            return "quit"
-        if action == "peek":
-            show_solution_pager(target_lines)
-            attempt_path = fresh_attempt()
-            continue
-        if action == "retry":
-            attempt_path = fresh_attempt()
-            continue
-
-
 def run_focus_session(files: list[Path]) -> int:
     """Run focus drills sequentially, honoring quit requests with exit code 2."""
     if not files:
@@ -1144,21 +928,11 @@ def run_focus_session(files: list[Path]) -> int:
 def get_attempt_history(solution_path: Path) -> List[dict]:
     """Parse attempt history for the given solution."""
     basename = solution_path.stem or solution_path.name
-    suffix = solution_path.suffix
     
-    # Handle markdown solutions with .attempt.md extension
-    is_markdown = suffix == ".md"
-    if is_markdown:
-        pattern = f"{basename}-*.attempt.md"
-        name_regex = re.compile(rf"{re.escape(basename)}-(\d+)\.attempt\.md$")
-    else:
-        pattern = f"{basename}-*{suffix}" if suffix else f"{basename}-*"
-        name_regex = re.compile(rf"{re.escape(basename)}-(\d+){re.escape(suffix)}$")
+    pattern = f"{basename}-*.attempt.md"
+    name_regex = re.compile(rf"{re.escape(basename)}-(\d+)\.attempt\.md$")
 
     attempts = []
-    # Match both legacy format (Line accuracy) and markdown format (DOCUMENT SCORE)
-    line_acc_re = re.compile(r"Line accuracy:\s+(\d+\.\d+)%")
-    char_acc_re = re.compile(r"Character accuracy:\s+(\d+\.\d+)%")
     doc_score_re = re.compile(r"DOCUMENT SCORE:\s+(\d+\.\d+)%")
 
     for path in ATTEMPTS_ROOT.glob(pattern):
@@ -1169,22 +943,15 @@ def get_attempt_history(solution_path: Path) -> List[dict]:
         try:
             content = path.read_text(encoding="utf-8")
             
-            # Try markdown format first (DOCUMENT SCORE)
             doc_matches = doc_score_re.findall(content)
-            if doc_matches:
-                # For markdown, document score is the main metric
-                line_acc = float(doc_matches[-1])
-                char_acc = line_acc  # Use same value for consistency
-            else:
-                # Fall back to legacy format
-                line_matches = line_acc_re.findall(content)
-                char_matches = char_acc_re.findall(content)
-                
-                if not line_matches or not char_matches:
+            if not doc_matches:
+                # Check for perfect recall message (no DOCUMENT SCORE printed)
+                if "Perfect recall:" in content:
+                    line_acc = 100.0
+                else:
                     continue
-                
-                line_acc = float(line_matches[-1])
-                char_acc = float(char_matches[-1])
+            else:
+                line_acc = float(doc_matches[-1])
 
             timestamp = path.stat().st_mtime
 
@@ -1196,7 +963,7 @@ def get_attempt_history(solution_path: Path) -> List[dict]:
                     "number": number,
                     "timestamp": timestamp,
                     "line_acc": line_acc,
-                    "char_acc": char_acc,
+                    "char_acc": line_acc,  # Same value for consistency
                     "path": path,
                 }
             )
