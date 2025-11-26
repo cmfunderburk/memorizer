@@ -486,15 +486,6 @@ def get_next_attempt_path(solution_path: Path) -> Path:
     return ATTEMPTS_ROOT / f"{basename}-{next_number}{suffix}"
 
 
-def prefill_markdown_attempt(attempt_path: Path, template: str) -> None:
-    """Write markdown template with placeholders to attempt file."""
-    try:
-        with attempt_path.open("w", encoding="utf-8") as f:
-            f.write(template)
-    except OSError as exc:
-        die(f"Failed to write template to '{attempt_path}': {exc}")
-
-
 # ==========================================================================
 # EDITOR MANAGEMENT
 # ==========================================================================
@@ -824,11 +815,19 @@ def run_drill(
     template = render_attempt_template(parsed_solution)
     
     def fresh_attempt() -> Path:
-        attempt = get_next_attempt_path(solution_path)
-        # Create the file
-        attempt.touch()
-        prefill_markdown_attempt(attempt, template)
-        return attempt
+        # Atomic file creation to handle concurrent processes
+        max_retries = 100
+        for _ in range(max_retries):
+            attempt = get_next_attempt_path(solution_path)
+            try:
+                # "x" mode: exclusive creation, fails if file exists
+                with attempt.open("x", encoding="utf-8") as f:
+                    f.write(template)
+                return attempt
+            except FileExistsError:
+                # Another process created this file, retry with next number
+                continue
+        die(f"Failed to create attempt file after {max_retries} retries")
     
     attempt_path = fresh_attempt()
     
