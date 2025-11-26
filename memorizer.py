@@ -583,9 +583,13 @@ def compute_stats(
 
     expected_text = "\n".join(expected)
     actual_text = "\n".join(actual)
-    matcher = SequenceMatcher(a=expected_text, b=actual_text, autojunk=False)
+    
+    # Character accuracy ignoring whitespace
+    expected_no_ws = re.sub(r'\s', '', expected_text)
+    actual_no_ws = re.sub(r'\s', '', actual_text)
+    matcher = SequenceMatcher(a=expected_no_ws, b=actual_no_ws, autojunk=False)
     matching_chars = sum(size for _, _, size in matcher.get_matching_blocks())
-    total_expected_chars = len(expected_text)
+    total_expected_chars = len(expected_no_ws)
 
     def percentage(match: int, total: int, *, zero_case: float = 100.0) -> float:
         if total == 0:
@@ -600,7 +604,7 @@ def compute_stats(
     char_accuracy = percentage(
         matching_chars,
         total_expected_chars,
-        zero_case=100.0 if len(actual_text) == 0 else 0.0,
+        zero_case=100.0 if len(actual_no_ws) == 0 else 0.0,
     )
 
     return {
@@ -667,7 +671,7 @@ def render_markdown_report(
             accuracy_str = f"{ANSI_GREEN}100.0%{ANSI_RESET}"
         else:
             status = f"{ANSI_YELLOW}✗{ANSI_RESET}"
-            accuracy_str = f"{ANSI_YELLOW}{result.line_accuracy:.1f}%{ANSI_RESET}"
+            accuracy_str = f"{ANSI_YELLOW}{result.char_accuracy:.1f}%{ANSI_RESET}"
         
         print(
             f"BLOCK {result.block_index} ({lang_str}, {result.expected_lines} lines):  "
@@ -706,7 +710,7 @@ def render_markdown_report(
     
     # Document summary
     print(HEADER_RULE, file=out)
-    min_accuracy = min(r.line_accuracy for r in block_results) if block_results else 0.0
+    min_accuracy = min(r.char_accuracy for r in block_results) if block_results else 0.0
     num_blocks = len(block_results)
     print(f"DOCUMENT SCORE: {min_accuracy:.1f}% (min of {num_blocks} block{'s' if num_blocks != 1 else ''})", file=out)
     print(HEADER_RULE, file=out)
@@ -784,7 +788,7 @@ def prompt_continue_after_perfect(next_solution: Path | None) -> Literal["contin
     while True:
         try:
             if next_solution is not None:
-                prompt = f"Next solution: {next_solution.name}\nContinue? [Y(continue)/q(quit)] "
+                prompt = f"Next solution: {ANSI_BOLD}{ANSI_BRIGHT_GREEN}{next_solution.name}{ANSI_RESET}\nContinue? [Y(continue)/q(quit)] "
                 response = input(prompt).strip().lower()
                 if response == "" or response == "y":
                     return "continue"
