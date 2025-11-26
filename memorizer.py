@@ -709,11 +709,17 @@ def render_markdown_report(
     min_accuracy = min(r.line_accuracy for r in block_results) if block_results else 0.0
     num_blocks = len(block_results)
     print(f"DOCUMENT SCORE: {min_accuracy:.1f}% (min of {num_blocks} block{'s' if num_blocks != 1 else ''})", file=out)
+    print(HEADER_RULE, file=out)
     
     if all(r.is_perfect for r in block_results):
-        print(f"{ANSI_BOLD}{ANSI_BRIGHT_YELLOW}★ Perfect recall! ★{ANSI_RESET}", file=out)
-    
-    print(HEADER_RULE, file=out)
+        # Celebratory banner for perfect recall
+        print(file=out)
+        print(f"{ANSI_BOLD}    ┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓{ANSI_RESET}", file=out)
+        print(f"{ANSI_BOLD}    ┃                              ┃{ANSI_RESET}", file=out)
+        print(f"{ANSI_BOLD}    ┃    ★  PERFECT RECALL  ★      ┃{ANSI_RESET}", file=out)
+        print(f"{ANSI_BOLD}    ┃                              ┃{ANSI_RESET}", file=out)
+        print(f"{ANSI_BOLD}    ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛{ANSI_RESET}", file=out)
+        print(file=out)
 
 
 def show_solution_pager(content: List[str]) -> None:
@@ -855,26 +861,14 @@ def run_drill(
         # Check if all blocks are perfect
         all_perfect = all(r.is_perfect for r in block_results)
         
-        if all_perfect:
-            plain_message = (
-                f"Perfect recall: {solution_path.name} matches exactly "
-                f"({attempt_path.name})."
-            )
-            banner_width = len(plain_message) + 6
-            border = "═" * banner_width
-            print()
-            print(f"{ANSI_BOLD}{ANSI_BRIGHT_GREEN}╔{border}╗{ANSI_RESET}")
-            print(f"{ANSI_BOLD}{ANSI_BRIGHT_GREEN}║{ANSI_RESET}   {ANSI_BOLD}{ANSI_BRIGHT_YELLOW}★{ANSI_RESET} {ANSI_BOLD}{plain_message}{ANSI_RESET} {ANSI_BOLD}{ANSI_BRIGHT_YELLOW}★{ANSI_RESET}   {ANSI_BOLD}{ANSI_BRIGHT_GREEN}║{ANSI_RESET}")
-            print(f"{ANSI_BOLD}{ANSI_BRIGHT_GREEN}╚{border}╝{ANSI_RESET}")
-            print()
-            append_report_to_attempt(attempt_path, plain_message)
-            return "perfect"
-        
-        # Show report for imperfect attempt
+        # Always show the report (includes celebration banner if perfect)
         report_buffer = io.StringIO()
         tee = TeeWriter(sys.stdout, report_buffer)
         render_markdown_report(solution_path, attempt_path, block_results, out=tee)
         append_report_to_attempt(attempt_path, report_buffer.getvalue())
+        
+        if all_perfect:
+            return "perfect"
         
         action = prompt_next_action(allow_quit=allow_quit)
         if action == "stop":

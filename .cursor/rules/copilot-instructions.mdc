@@ -5,7 +5,7 @@ alwaysApply: true
 
 ## Overview
 
-MEMORIZER is a single-file Python CLI (~1050 lines) for practicing code recall. Users write solution files in Markdown with fenced code blocks as memorization targets. The tool creates attempt files, launches an editor, and diffs the result.
+MEMORIZER is a single-file Python CLI for practicing code recall. Users write solution files in Markdown with fenced code blocks as memorization targets. The tool creates attempt files, launches an editor, and diffs the result.
 
 **Stack**: Python 3.10+ (stdlib only). Optional: `fzf`, `nvim`/`vim`, `less`.
 
