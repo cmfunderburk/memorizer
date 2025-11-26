@@ -1,78 +1,113 @@
-<HighLevelDetails>
+---
+alwaysApply: true
+---
+# MEMORIZER Codebase Guide
 
-- **Summary**: MEMORIZER is a standalone Python CLI tool for practicing code recall. It presents a canonical "solution" file, opens a blank "attempt" file in the user's editor ($VISUAL/$EDITOR), and upon exit, generates a strict line-by-line and character-level diff report. It tracks history and statistics by parsing appended reports in attempt files.
-- **Project Type**: Python CLI application.
-- **Languages**: Python 3.10+.
-- **Dependencies**: Standard library only. No `requirements.txt` or `setup.py`.
-- **Optional External Tools**: 
-  - `fzf`: For interactive fuzzy file selection.
-  - `nvim`/`vim`/`vi`: Default editor fallbacks.
-  - `less`: Default pager for "peek" mode.
+## Overview
 
-</HighLevelDetails>
+MEMORIZER is a single-file Python CLI (~1050 lines) for practicing code recall. Users write solution files in Markdown with fenced code blocks as memorization targets. The tool creates attempt files, launches an editor, and diffs the result.
 
-<BuildInstructions>
+**Stack**: Python 3.10+ (stdlib only). Optional: `fzf`, `nvim`/`vim`, `less`.
 
-- **Run Application**: 
-  `python3 memorizer.py [path/to/solution]`
-  - Interactive mode: `python3 memorizer.py` (uses `fzf` or nested menu).
-  - Stats mode: `python3 memorizer.py path/to/solution --stats`.
+## Architecture
 
-- **Validate Changes (Testing)**:
-  Since there is no unit test suite, validation is performed by simulating editor interaction using `tee`.
-  
-  1. **Validate Perfect Recall (Exit Code 0)**:
-     This pipes the correct solution directly into the attempt file.
-     ```bash
-     cat solutions/algorithms/CLRS/insertion_sort.py | EDITOR=/usr/bin/tee python3 memorizer.py solutions/algorithms/CLRS/insertion_sort.py
-     ```
-     *Precondition*: `solutions/algorithms/CLRS/insertion_sort.py` must exist.
-     *Success*: Output includes "*** Perfect recall" and exit code is 0.
-  
-  2. **Validate Incorrect Recall (Exit Code 1)**:
-     This simulates an incorrect attempt.
-     ```bash
-     printf "def incorrect():\n    pass\n" | EDITOR=/usr/bin/tee python3 memorizer.py solutions/algorithms/CLRS/insertion_sort.py
-     ```
-     *Success*: Output shows diff report and exit code is 1.
+All logic lives in `memorizer.py`. Key data flow:
 
-  3. **Focus Mode**:
-     `python3 memorizer.py --focus` runs drills for files in `solutions/focus/`.
+```
+Solution (.md) → parse_markdown() → ParsedMarkdown{blocks, target_blocks}
+                                          ↓
+                          render_attempt_template() → .attempt.md with [BLOCK N] placeholders
+                                          ↓
+                              User edits in $EDITOR
+                                          ↓
+                          parse_markdown(attempt) → compare_blocks() → BlockResult[]
+                                          ↓
+                          render_markdown_report() → ANSI diff output
+```
 
-- **Linting**:
-  - No explicit linter configuration exists. Follow PEP 8 standards.
-  - Check for syntax errors: `python3 -m py_compile memorizer.py`.
+### Key Types
+- `CodeBlock`: Parsed fenced block (language, content, start/end positions, is_target)
+- `ParsedMarkdown`: Contains raw_text, all blocks, and target_blocks (excluding `<!-- INFO -->` marked)
+- `BlockResult`: Per-block comparison result (accuracy scores, diff_ops, is_perfect)
 
-- **Environment Setup**:
-  - Ensure `PYTHONPATH` includes the root if running from subdirectories (though usually not required as the script is standalone).
-  - `attempts/` directory is automatically created; do not commit files there.
+### Core Functions
+| Function | Purpose |
+|----------|---------|
+| `parse_markdown(text)` | Extract fenced code blocks, respect `<!-- INFO -->` markers |
+| `render_attempt_template(parsed)` | Generate attempt file with `[BLOCK N]` placeholders |
+| `compare_blocks(expected, actual)` | Per-block diff using `compute_line_diff()` |
+| `run_drill(solution_path)` | Main practice loop: parse → edit → compare → retry |
+| `get_attempt_history(solution_path)` | Parse stats from `.attempt.md` files |
 
-</BuildInstructions>
+## Solution File Format
 
-<ProjectLayout>
+Solutions are Markdown in `solutions/`. Fenced code blocks are targets:
 
-- **Core File**:
-  - `memorizer.py`: The entire application logic (~800 lines). Contains CLI parsing, file I/O, diff calculation, stats parsing, and UI rendering.
+```markdown
+# Algorithm Name
 
-- **Directory Structure**:
-  - `solutions/`: Contains the canonical source code for memorization practice.
-    - `algorithms/CLRS/`: Algorithms from the CLRS textbook (e.g., `insertion_sort.py`).
-    - `focus/`: Symbolic links or copies of solutions currently being focused on.
-  - `attempts/`: (Gitignored) Stores user attempts named `filename-N.ext`.
-  - `docs/`: Documentation and planning artifacts.
-    - `planning/CURRENT/consolidated_quick_wins.md`: Current roadmap for `memorizer.py` refactoring.
+**Time:** O(?)  |  **Space:** O(?)
 
-- **Configuration**:
-  - No external configuration files. Configuration (editor detection, paths) is hardcoded or uses environment variables (`$EDITOR`, `$PAGER`).
+## Implementation
 
-- **Key Logic Locations in `memorizer.py`**:
-  - `run_drill()`: Main loop for a single practice session.
-  - `compute_line_diff()` / `render_char_diff()`: Logic for comparison and ANSI output.
-  - `get_attempt_history()`: Parses stats from regex matches in attempt files.
-  - `MEMO_START_MARKER` ("=== MEMO START ==="): Delimiter in solution files separating context (pre-filled) from target code (to be memorized).
+```python
+def algorithm():
+    pass
+```
+```
 
-- **Validation Pipelines**:
-  - None. Manual validation via the `tee` command is the standard procedure.
+- Multiple code blocks → multiple targets (all must be reproduced)
+- `<!-- INFO -->` before a block excludes it from memorization
+- Document score = min(block_scores); perfect = all blocks 100%
 
-</ProjectLayout>
+## Directory Structure
 
+```
+memorizer.py              # All application code
+solutions/
+  focus/                  # Active drill targets (--focus mode)
+  new_format/             # Additional solutions
+  prospective/            # Legacy format, awaiting conversion to markdown
+attempts/                 # Auto-generated .attempt.md files (gitignored)
+docs/planning/CURRENT/    # Design documents
+```
+
+Note: Files in `prospective/` are in old formats (.py, .c, etc.) and need conversion to `.md` before use.
+
+## Commands
+
+```bash
+# Run drill
+python3 memorizer.py solutions/focus/merge_sort.md
+
+# Interactive selection
+python3 memorizer.py
+
+# Focus mode (random order through solutions/focus/)
+python3 memorizer.py --focus
+
+# View history
+python3 memorizer.py solutions/focus/merge_sort.md --stats
+```
+
+## Testing Without Editor
+
+Use `tee` to simulate editor interaction:
+
+```bash
+# Extract code blocks and pipe as "typed" content
+python3 -c "
+from memorizer import parse_markdown
+text = open('solutions/focus/insertion_sort.md').read()
+for b in parse_markdown(text).target_blocks:
+    print(b.content)
+" | EDITOR=/usr/bin/tee python3 memorizer.py solutions/focus/insertion_sort.md
+# Exit code 0 = perfect recall
+```
+
+## Conventions
+
+- Single-file architecture: all changes go in `memorizer.py`
+- ANSI colors via constants (e.g., `ANSI_GREEN`, `ANSI_RED_BG`)
+- Path handling: `BASE_DIR`, `SOLUTIONS_ROOT`, `ATTEMPTS_ROOT` constants
+- Planning docs go in `docs/planning/CURRENT/`

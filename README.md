@@ -1,26 +1,99 @@
 # MEMORIZER
 
-MEMORIZER is a single-user CLI for practicing code or text recall. It opens an empty attempt file in your terminal editor, lets you re-type a canonical solution from memory, and then prints strict line + character diffs with ANSI coloring.
+MEMORIZER is a single-user CLI for practicing code recall. You write solution files in Markdown with fenced code blocks as memorization targets. MEMORIZER opens an attempt file in your editor, you type the code from memory, and it prints strict line + character diffs with ANSI coloring.
 
 ## Requirements
 - Python 3.10+
 - A terminal editor discoverable via `$VISUAL`, `$EDITOR`, or one of `nvim`, `vim`, `vi`
 - Optional: `fzf` for fast fuzzy-finding file selection
 
+## Solution File Format
+
+Solutions are Markdown files (`.md`) where fenced code blocks are the memorization targets:
+
+```markdown
+# Insertion Sort
+
+**Time:** O(n²)  |  **Space:** O(1)
+
+## How It Works
+
+Builds sorted array one element at a time. For each element, shift larger 
+elements right until we find where it belongs, then insert.
+
+## Implementation
+
+```python
+def insertion_sort(arr):
+    for i in range(1, len(arr)):
+        key = arr[i]
+        j = i
+        while j > 0 and arr[j-1] > key:
+            arr[j] = arr[j-1]
+            j -= 1
+        arr[j] = key
+    return arr
+```
+
+## When to Use
+
+- Small datasets
+- Nearly-sorted data
+```
+
+The prose outside code blocks provides context (visible while typing). The code inside fenced blocks is what you must reproduce from memory.
+
+### Multiple Code Blocks
+
+Solutions can have multiple code blocks. Each is a separate target:
+
+```markdown
+# Merge Sort
+
+## Implementation
+
+```python
+def merge(left, right):
+    # ... merge function
+```
+
+```python
+def merge_sort(arr):
+    # ... recursive function
+```
+```
+
+You must reproduce all blocks correctly for perfect recall.
+
+### Informational Blocks
+
+To include code blocks that shouldn't be memorized (example output, usage), prefix with `<!-- INFO -->`:
+
+```markdown
+## Example Usage
+
+<!-- INFO -->
+```bash
+$ python sort.py
+[1, 2, 3, 4, 5]
+```
+```
+
 ## Usage
 
 ### Basic Usage
 ```bash
 # Direct file selection
-python3 memorizer.py solutions/algorithms/CLRS/insertion_sort.py
-python3 memorizer.py insertion_sort.py        # also works; resolved relative to solutions/
-python3 memorizer.py ../some/other/file.txt   # arbitrary readable file paths allowed
+python3 memorizer.py solutions/focus/insertion_sort.md
 
 # Interactive selection (fzf if available, else nested navigation)
 python3 memorizer.py
 
 # View attempt history for a solution
-python3 memorizer.py solutions/insertion_sort.py --stats
+python3 memorizer.py solutions/focus/insertion_sort.md --stats
+
+# Focus mode: drill all solutions in solutions/focus/ in random order
+python3 memorizer.py --focus
 ```
 
 ### Interactive Selection
@@ -29,70 +102,50 @@ When invoked without a solution path, MEMORIZER uses:
 
 1. **fzf** (if installed): Fuzzy-find any solution file instantly with type-ahead search
 2. **Nested navigation**: Browse directories interactively with numbered menus
-   - Enter a number or exact filename to select
-   - Navigate into directories, use `..` to go back
-   - Files display without trailing `/`, directories with `/`
 
 ### The Workflow
-1. A new attempt file is created under `attempts/` with incremental numbering (e.g., `insertion_sort-3.py`).
-2. Your editor opens the attempt file; type the solution from memory and quit the editor.
-3. MEMORIZER compares the attempt against the canonical file and prints:
-   - Full diff with strict whitespace sensitivity.
-   - Inline character-level highlights (red background = missing/incorrect, green = extra text).
-   - Summary statistics (lines, inserts/deletes, line & character accuracy).
-4. If not perfect, you're prompted: `[Y(retry)/n(stop)/p(peek)]`
+
+1. A new attempt file is created under `attempts/` with `.attempt.md` extension (e.g., `insertion_sort-3.attempt.md`).
+2. The attempt file is pre-filled with the solution's Markdown, but code blocks show placeholders like `[BLOCK 1] python - 9 lines`.
+3. Your editor opens; replace placeholders with code from memory, save, and quit.
+4. MEMORIZER compares each block against the solution and prints:
+   - Per-block accuracy scores
+   - Inline character-level highlights for errors (red = missing, green = extra)
+   - Document score = minimum block score
+5. If not perfect, you're prompted: `[Y(retry)/n(stop)/p(peek)]`
    - **Y** or Enter: Create a new attempt and retry
-   - **n**: Stop and exit with code 1
-   - **p**: Peek at the solution in your pager (e.g., `less`), then retry with new attempt
-5. The rendered MEMORIZATION CHECK + SUMMARY block is appended to the attempt file so you can review scores later.
-6. Exit codes: `0` for perfect matches, `1` for differences, `2` for errors.
+   - **n**: Stop and exit
+   - **p**: Peek at the solution blocks in your pager, then retry
+6. Exit codes: `0` for perfect recall, `1` for stopped, `2` for quit/errors.
 
-Attempt files are never deleted—each run archives a permanent record in `attempts/` for future review.
+### Scoring
 
-### Context Marker
-
-Solution files can include a context section that gets pre-filled into attempts but isn't graded. Add `=== MEMO START ===` on a line by itself:
-
-```python
-# insertion_sort.py
-"""Insertion sort from CLRS Chapter 2."""
-
-def insertion_sort(arr):
-    # Implementation details...
-    pass
-
-=== MEMO START ===
-
-def insertion_sort(arr):
-    for i in range(1, len(arr)):
-        key = arr[i]
-        j = i - 1
-        while j >= 0 and arr[j] > key:
-            arr[j + 1] = arr[j]
-            j -= 1
-        arr[j + 1] = key
-    return arr
-```
-
-Everything before the marker is pre-filled context; only content after is compared against your attempt.
+- Each code block is scored independently (line accuracy %)
+- Document score = minimum of all block scores
+- Perfect recall requires 100% on every block
 
 ## Stats Mode
 
-Track your progress over time with the `--stats` flag:
+Track your progress over time:
 
 ```bash
-python3 memorizer.py insertion_sort.py --stats
+python3 memorizer.py solutions/focus/merge_sort.md --stats
 ```
 
 Output shows:
 - Attempt number and date for each historical attempt
-- Line and character accuracy percentages
-- Current streak of perfect (100% line accuracy) attempts
+- Accuracy percentages
+- Current streak of perfect attempts
 
-Stats are parsed from the appended summary blocks in attempt files.
+## Focus Mode
 
-## Editor Detection
-Preference order: `$VISUAL` → `$EDITOR` → `nvim` → `vim` → `vi`. If no editor is available, the CLI exits with code `2` and instructs you to set an editor.
+Drill all solutions in `solutions/focus/` in random order:
+
+```bash
+python3 memorizer.py --focus
+```
+
+Progress through each solution. After perfect recall, continue to the next or quit.
 
 ## Configuration
 
@@ -102,94 +155,90 @@ MEMORIZER respects standard environment variables:
 
 ## Repository Layout
 ```
-memorizer.py                  # single-file CLI implementation (~787 lines)
-solutions/                    # canonical snippets, organized hierarchically
+memorizer.py                  # single-file CLI implementation
+solutions/                    # canonical snippets in Markdown format
+  focus/                      # solutions for --focus mode drilling
+  new_format/                 # additional solutions
   algorithms/
-    CLRS/                     # algorithms from CLRS textbook
+    CLRS/
     leetcode/
-      easy/
-      medium/
-  econ/                       # economics problems/models
-  other/
-attempts/                     # auto-created, incrementally numbered attempt files (.gitignored)
+  econ/
+  prospective/                # solutions not yet converted/active
+attempts/                     # auto-created attempt files (.gitignored)
 docs/
   planning/CURRENT/           # feature proposals and design docs
-  review/                     # code reviews from AI models
-README.md                     # this file
+README.md
 ```
 
 ## Example Session
 
 ```bash
-$ python3 memorizer.py
-Using nested navigation (install fzf for faster selection)
-Current directory: .
-  1. algorithms/
-  2. econ/
-  3. other/
+$ python3 memorizer.py solutions/focus/merge_sort.md
 
-Select a solution (number or name): 1
+# Editor opens attempts/merge_sort-1.attempt.md with:
+#
+# # Merge Sort
+# 
+# **Time:** O(n log n)  |  **Space:** O(n)
+# 
+# ## Implementation
+# 
+# ```python
+# [BLOCK 1] python - 13 lines
+# ```
+# 
+# ```python
+# [BLOCK 2] python - 7 lines
+# ```
 
-Current directory: algorithms
-  1. ..
-  2. CLRS/
-  3. leetcode/
-
-Select a solution (number or name): 2
-
-Current directory: algorithms/CLRS
-  1. ..
-  2. insertion_sort.py
-  3. merge_sort.py
-  4. quicksort_new.py
-
-Select a solution (number or name): 2
-
-# Editor opens attempts/insertion_sort-15.py
-# You type from memory, save, and quit
+# You replace placeholders with code from memory, save, quit
 
 ========================================
-MEMORIZATION CHECK: insertion_sort.py
-Attempt: insertion_sort-15.py
-========================================
-    1  def insertion_sort(arr):
-    2      for i in range(1, len(arr)):
-    3          key = arr[i]
--   4          j = i - 1
-+   4          idx = i - 1
-    5          while j >= 0 and arr[j] > key:
-    6              arr[j + 1] = arr[j]
-    7              j -= 1
-    8          arr[j + 1] = key
-    9      return arr
+MEMORIZATION CHECK: merge_sort.md
+Attempt: merge_sort-1.attempt.md
 ========================================
 
-SUMMARY
-========================================
-Total lines (expected):      9
-Total lines (yours):         9
-Matching lines:              8
-Changed lines:               1
-Inserted lines:              0
-Deleted lines:               0
+BLOCK 1 (python, 13 lines):  ✓ 100.0%
 
-Line accuracy:            88.9% (8/9)
-Character accuracy:       97.4% (150/154)
+BLOCK 2 (python, 7 lines):   ✗ 85.7%
+
+   -   5  left = merge_sort(arr[:mid])
+   +   5  left = mergesort(arr[:mid])
+
+========================================
+DOCUMENT SCORE: 85.7% (min of 2 blocks)
 ========================================
 
 Action? [Y(retry)/n(stop)/p(peek)]
 ```
 
-## Testing
+## Creating Solution Files
 
-For non-interactive testing, use `tee` as the editor:
+1. Create a `.md` file in `solutions/`
+2. Write explanatory prose (context you'll see while typing)
+3. Add fenced code blocks for content to memorize
+4. Optionally mark informational blocks with `<!-- INFO -->`
 
-```bash
-# Perfect recall test
-cat solutions/insertion_sort.py | EDITOR=/usr/bin/tee python3 memorizer.py insertion_sort.py
-echo $?  # Should be 0
+Example template:
 
-# Partial recall test
-printf 'def foo():\n    pass\n' | EDITOR=/usr/bin/tee python3 memorizer.py insertion_sort.py
-echo $?  # Should be 1
+```markdown
+# Algorithm Name
+
+**Time:** O(?)  |  **Space:** O(?)
+
+## How It Works
+
+Brief explanation of the algorithm.
+
+## Implementation
+
+```python
+def algorithm():
+    pass
+```
+
+## When to Use
+
+- Use case 1
+- Use case 2
 ```
