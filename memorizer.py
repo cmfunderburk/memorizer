@@ -12,6 +12,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import List, Literal, NoReturn, Protocol, Sequence
@@ -39,6 +40,176 @@ ANSI_BRIGHT_GREEN = "\033[92m"
 ANSI_BRIGHT_YELLOW = "\033[93m"
 HEADER_RULE = "=" * 40
 MEMO_START_MARKER = "=== MEMO START ==="
+INFO_MARKER = "<!-- INFO -->"
+
+# Regex for fenced code blocks: ```lang\ncontent\n```
+CODE_BLOCK_PATTERN = re.compile(
+    r'^```(\w*)\n(.*?)^```',
+    re.MULTILINE | re.DOTALL
+)
+
+
+# ==========================================================================
+# MARKDOWN PARSING
+# ==========================================================================
+
+@dataclass
+class CodeBlock:
+    """A fenced code block extracted from markdown."""
+    language: str
+    content: str
+    start_pos: int  # character position in raw text where ``` starts
+    end_pos: int    # character position where closing ``` ends
+    is_target: bool  # True unless preceded by <!-- INFO -->
+
+
+@dataclass
+class ParsedMarkdown:
+    """Result of parsing a markdown file."""
+    raw_text: str
+    blocks: list[CodeBlock]
+    target_blocks: list[CodeBlock]
+
+
+def parse_markdown(text: str) -> ParsedMarkdown:
+    """
+    Extract fenced code blocks from markdown text.
+    
+    Blocks preceded by <!-- INFO --> (within 50 chars) are marked as non-targets.
+    Returns ParsedMarkdown with all blocks and filtered target_blocks.
+    """
+    blocks: list[CodeBlock] = []
+    
+    for match in CODE_BLOCK_PATTERN.finditer(text):
+        language = match.group(1)
+        content = match.group(2)
+        start_pos = match.start()
+        end_pos = match.end()
+        
+        # Check for INFO marker in preceding 50 characters
+        lookback_start = max(0, start_pos - 50)
+        preceding_text = text[lookback_start:start_pos]
+        is_target = INFO_MARKER not in preceding_text
+        
+        # Strip trailing newline from content if present
+        if content.endswith('\n'):
+            content = content[:-1]
+        
+        blocks.append(CodeBlock(
+            language=language,
+            content=content,
+            start_pos=start_pos,
+            end_pos=end_pos,
+            is_target=is_target,
+        ))
+    
+    target_blocks = [b for b in blocks if b.is_target]
+    
+    return ParsedMarkdown(
+        raw_text=text,
+        blocks=blocks,
+        target_blocks=target_blocks,
+    )
+
+
+def render_attempt_template(parsed: ParsedMarkdown) -> str:
+    """
+    Generate attempt file content with placeholders for target blocks.
+    
+    Replaces each target block's content with [BLOCK N] placeholder,
+    preserving the fence markers and surrounding markdown.
+    """
+    result = parsed.raw_text
+    
+    # Process blocks in reverse order to preserve positions
+    for i, block in enumerate(reversed(parsed.target_blocks)):
+        block_num = len(parsed.target_blocks) - i
+        line_count = block.content.count('\n') + 1 if block.content else 0
+        lang_str = block.language if block.language else "code"
+        placeholder = f"[BLOCK {block_num}] {lang_str} - {line_count} lines"
+        
+        # Find the content portion within the fenced block
+        # The block goes from start_pos to end_pos
+        # Format: ```lang\ncontent\n```
+        block_text = result[block.start_pos:block.end_pos]
+        
+        # Find where content starts (after ```lang\n)
+        first_newline = block_text.find('\n')
+        if first_newline == -1:
+            continue
+            
+        # Find where content ends (before \n```)
+        last_fence = block_text.rfind('```')
+        if last_fence == -1:
+            continue
+        
+        # Build new block with placeholder
+        opening = block_text[:first_newline + 1]  # ```lang\n
+        closing = block_text[last_fence:]          # ```
+        new_block = f"{opening}{placeholder}\n{closing}"
+        
+        # Replace in result
+        result = result[:block.start_pos] + new_block + result[block.end_pos:]
+    
+    return result
+
+
+@dataclass
+class BlockResult:
+    """Result of comparing a single code block."""
+    block_index: int
+    language: str
+    expected_lines: int
+    actual_lines: int
+    line_accuracy: float
+    char_accuracy: float
+    is_perfect: bool
+    diff_ops: list  # For rendering diffs
+    expected: list[str]
+    actual: list[str]
+
+
+def compare_blocks(
+    expected_blocks: list[CodeBlock],
+    actual_blocks: list[str],
+) -> list[BlockResult]:
+    """
+    Compare expected code blocks against actual attempt blocks.
+    
+    Returns per-block results. Missing actual blocks score 0%.
+    Extra actual blocks are ignored.
+    """
+    results: list[BlockResult] = []
+    
+    for i, expected_block in enumerate(expected_blocks):
+        expected_lines = expected_block.content.splitlines()
+        expected_lines = strip_trailing_blank_lines(expected_lines)
+        
+        if i < len(actual_blocks):
+            actual_lines = actual_blocks[i].splitlines()
+            actual_lines = strip_trailing_blank_lines(actual_lines)
+        else:
+            # Missing block
+            actual_lines = []
+        
+        diff_ops = compute_line_diff(expected_lines, actual_lines)
+        stats = compute_stats(diff_ops, expected_lines, actual_lines)
+        is_perfect = compute_perfect_match(diff_ops, stats)
+        
+        results.append(BlockResult(
+            block_index=i + 1,
+            language=expected_block.language,
+            expected_lines=len(expected_lines),
+            actual_lines=len(actual_lines),
+            line_accuracy=stats["line_accuracy"],
+            char_accuracy=stats["char_accuracy"],
+            is_perfect=is_perfect,
+            diff_ops=diff_ops,
+            expected=expected_lines,
+            actual=actual_lines,
+        ))
+    
+    return results
 
 
 class Writer(Protocol):
@@ -296,15 +467,23 @@ def interactive_select(start_dir: Path) -> Path:
     return _select_nested(start_dir)
 
 
-def get_next_attempt_path(solution_path: Path) -> Path:
+def get_next_attempt_path(solution_path: Path, *, markdown: bool = False) -> Path:
     """Determine the next numbered attempt filename for the solution."""
     ATTEMPTS_ROOT.mkdir(exist_ok=True)
     basename = solution_path.stem or solution_path.name
-    suffix = solution_path.suffix
-    pattern = f"{basename}-*{suffix}" if suffix else f"{basename}-*"
+    
+    # For markdown solutions, use .attempt.md extension
+    if markdown or solution_path.suffix == ".md":
+        suffix = ".attempt.md"
+        pattern = f"{basename}-*.attempt.md"
+        # Match basename-N where N is a number, before .attempt.md
+        regex = re.compile(rf"{re.escape(basename)}-(\d+)\.attempt$")
+    else:
+        suffix = solution_path.suffix
+        pattern = f"{basename}-*{suffix}" if suffix else f"{basename}-*"
+        regex = re.compile(rf"{re.escape(basename)}-(\d+)$")
 
     highest = 0
-    regex = re.compile(rf"{re.escape(basename)}-(\d+)$")
     for path in ATTEMPTS_ROOT.glob(pattern):
         match = regex.search(path.stem)
         if match:
@@ -337,6 +516,22 @@ def prefill_attempt_file(attempt_path: Path, context_lines: List[str]) -> None:
             f.write(f"\n{MEMO_START_MARKER}\n\n")
     except OSError as exc:
         die(f"Failed to write context to '{attempt_path}': {exc}")
+
+
+def prefill_markdown_attempt(attempt_path: Path, template: str) -> None:
+    """Write markdown template with placeholders to attempt file."""
+    try:
+        with attempt_path.open("w", encoding="utf-8") as f:
+            f.write(template)
+    except OSError as exc:
+        die(f"Failed to write template to '{attempt_path}': {exc}")
+
+
+def detect_format(path: Path) -> Literal["markdown", "legacy"]:
+    """Detect solution file format based on extension."""
+    if path.suffix == ".md":
+        return "markdown"
+    return "legacy"
 
 
 # ==========================================================================
@@ -603,6 +798,76 @@ def compute_perfect_match(diff_ops, stats: dict) -> bool:
     )
 
 
+def render_markdown_report(
+    solution_path: Path,
+    attempt_path: Path,
+    block_results: list[BlockResult],
+    *,
+    out: Writer = sys.stdout,
+) -> None:
+    """Print per-block scores and document summary for markdown solutions."""
+    print(HEADER_RULE, file=out)
+    print(f"{ANSI_BOLD}MEMORIZATION CHECK:{ANSI_RESET} {solution_path.name}", file=out)
+    print(f"Attempt: {attempt_path.name}", file=out)
+    print(HEADER_RULE, file=out)
+    print(file=out)
+    
+    for result in block_results:
+        lang_str = result.language if result.language else "code"
+        if result.is_perfect:
+            status = f"{ANSI_GREEN}✓{ANSI_RESET}"
+            accuracy_str = f"{ANSI_GREEN}100.0%{ANSI_RESET}"
+        else:
+            status = f"{ANSI_YELLOW}✗{ANSI_RESET}"
+            accuracy_str = f"{ANSI_YELLOW}{result.line_accuracy:.1f}%{ANSI_RESET}"
+        
+        print(
+            f"BLOCK {result.block_index} ({lang_str}, {result.expected_lines} lines):  "
+            f"{status} {accuracy_str}",
+            file=out,
+        )
+        
+        # Show diff for imperfect blocks
+        if not result.is_perfect:
+            print(file=out)
+            for tag, i1, i2, j1, j2 in result.diff_ops:
+                if tag == "equal":
+                    for idx in range(i1, i2):
+                        print(f"    {idx + 1:>4}  {result.expected[idx]}", file=out)
+                elif tag == "replace":
+                    exp_block = result.expected[i1:i2]
+                    act_block = result.actual[j1:j2]
+                    max_block = max(len(exp_block), len(act_block))
+                    for offset in range(max_block):
+                        exp_line = exp_block[offset] if offset < len(exp_block) else ""
+                        act_line = act_block[offset] if offset < len(act_block) else ""
+                        colored_exp, colored_act = render_char_diff(exp_line, act_line)
+                        if offset < len(exp_block):
+                            print(f"   -{i1 + offset + 1:>4}  {colored_exp}", file=out)
+                        if offset < len(act_block):
+                            print(f"   +{j1 + offset + 1:>4}  {colored_act}", file=out)
+                elif tag == "delete":
+                    for idx in range(i1, i2):
+                        colored_exp, _ = render_char_diff(result.expected[idx], "")
+                        print(f"   -{idx + 1:>4}  {colored_exp}", file=out)
+                elif tag == "insert":
+                    for idx in range(j1, j2):
+                        _, colored_act = render_char_diff("", result.actual[idx])
+                        print(f"   +{idx + 1:>4}  {colored_act}", file=out)
+        print(file=out)
+    
+    # Document summary
+    print(HEADER_RULE, file=out)
+    min_accuracy = min(r.line_accuracy for r in block_results) if block_results else 0.0
+    num_blocks = len(block_results)
+    print(f"DOCUMENT SCORE: {min_accuracy:.1f}% (min of {num_blocks} block{'s' if num_blocks != 1 else ''})", file=out)
+    
+    if all(r.is_perfect for r in block_results):
+        print(f"{ANSI_BOLD}{ANSI_BRIGHT_YELLOW}★ Perfect recall! ★{ANSI_RESET}", file=out)
+    
+    print(HEADER_RULE, file=out)
+
+
 def show_solution_pager(content: List[str]) -> None:
     """Display the solution content in a pager."""
     if not content:
@@ -683,10 +948,105 @@ def prompt_continue_after_perfect(next_solution: Path | None) -> Literal["contin
             return "quit"
 
 
+def run_markdown_drill(
+    solution_path: Path, *, allow_quit: bool = False
+) -> Literal["perfect", "stopped", "quit"]:
+    """Run drill loop for markdown solutions with multi-block support."""
+    editor_cmd = detect_editor()
+    
+    # Parse solution file
+    solution_text = solution_path.read_text(encoding="utf-8")
+    parsed_solution = parse_markdown(solution_text)
+    
+    if not parsed_solution.target_blocks:
+        die(f"No target code blocks found in '{solution_path}'")
+    
+    # Generate attempt template
+    template = render_attempt_template(parsed_solution)
+    
+    def fresh_attempt() -> Path:
+        attempt = get_next_attempt_path(solution_path, markdown=True)
+        # Create the file
+        attempt.touch()
+        prefill_markdown_attempt(attempt, template)
+        return attempt
+    
+    attempt_path = fresh_attempt()
+    
+    while True:
+        launch_editor(editor_cmd, attempt_path)
+        
+        # Parse attempt file
+        attempt_text = attempt_path.read_text(encoding="utf-8")
+        # For attempts, ignore INFO markers - extract ALL code blocks
+        parsed_attempt = parse_markdown(attempt_text)
+        actual_contents = [b.content for b in parsed_attempt.blocks]
+        
+        # Warn if block count mismatch
+        expected_count = len(parsed_solution.target_blocks)
+        actual_count = len(actual_contents)
+        if actual_count > expected_count:
+            print(
+                f"{ANSI_YELLOW}Warning: Found {actual_count} code blocks, "
+                f"expected {expected_count}. Ignoring extra blocks.{ANSI_RESET}"
+            )
+        
+        # Compare blocks
+        block_results = compare_blocks(parsed_solution.target_blocks, actual_contents)
+        
+        # Check if all blocks are perfect
+        all_perfect = all(r.is_perfect for r in block_results)
+        
+        if all_perfect:
+            plain_message = (
+                f"Perfect recall: {solution_path.name} matches exactly "
+                f"({attempt_path.name})."
+            )
+            banner_width = len(plain_message) + 6
+            border = "═" * banner_width
+            print()
+            print(f"{ANSI_BOLD}{ANSI_BRIGHT_GREEN}╔{border}╗{ANSI_RESET}")
+            print(f"{ANSI_BOLD}{ANSI_BRIGHT_GREEN}║{ANSI_RESET}   {ANSI_BOLD}{ANSI_BRIGHT_YELLOW}★{ANSI_RESET} {ANSI_BOLD}{plain_message}{ANSI_RESET} {ANSI_BOLD}{ANSI_BRIGHT_YELLOW}★{ANSI_RESET}   {ANSI_BOLD}{ANSI_BRIGHT_GREEN}║{ANSI_RESET}")
+            print(f"{ANSI_BOLD}{ANSI_BRIGHT_GREEN}╚{border}╝{ANSI_RESET}")
+            print()
+            append_report_to_attempt(attempt_path, plain_message)
+            return "perfect"
+        
+        # Show report for imperfect attempt
+        report_buffer = io.StringIO()
+        tee = TeeWriter(sys.stdout, report_buffer)
+        render_markdown_report(solution_path, attempt_path, block_results, out=tee)
+        append_report_to_attempt(attempt_path, report_buffer.getvalue())
+        
+        action = prompt_next_action(allow_quit=allow_quit)
+        if action == "stop":
+            return "stopped"
+        if action == "quit":
+            return "quit"
+        if action == "peek":
+            # Show all target blocks
+            peek_content = []
+            for i, block in enumerate(parsed_solution.target_blocks, 1):
+                lang = block.language if block.language else "code"
+                peek_content.append(f"=== BLOCK {i} ({lang}) ===")
+                peek_content.append(block.content)
+                peek_content.append("")
+            show_solution_pager(peek_content)
+            attempt_path = fresh_attempt()
+            continue
+        if action == "retry":
+            attempt_path = fresh_attempt()
+            continue
+
+
 def run_drill(
     solution_path: Path, *, allow_quit: bool = False
 ) -> Literal["perfect", "stopped", "quit"]:
     """Run the full drill loop for a solution and return its outcome."""
+    # Route to markdown drill if appropriate
+    if detect_format(solution_path) == "markdown":
+        return run_markdown_drill(solution_path, allow_quit=allow_quit)
+    
     editor_cmd = detect_editor()
     solution_full_lines = read_file_lines(solution_path)
     context_lines, target_lines_raw = extract_context_and_target(solution_full_lines)
@@ -785,28 +1145,47 @@ def get_attempt_history(solution_path: Path) -> List[dict]:
     """Parse attempt history for the given solution."""
     basename = solution_path.stem or solution_path.name
     suffix = solution_path.suffix
-    pattern = f"{basename}-*{suffix}" if suffix else f"{basename}-*"
+    
+    # Handle markdown solutions with .attempt.md extension
+    is_markdown = suffix == ".md"
+    if is_markdown:
+        pattern = f"{basename}-*.attempt.md"
+        name_regex = re.compile(rf"{re.escape(basename)}-(\d+)\.attempt\.md$")
+    else:
+        pattern = f"{basename}-*{suffix}" if suffix else f"{basename}-*"
+        name_regex = re.compile(rf"{re.escape(basename)}-(\d+){re.escape(suffix)}$")
 
     attempts = []
+    # Match both legacy format (Line accuracy) and markdown format (DOCUMENT SCORE)
     line_acc_re = re.compile(r"Line accuracy:\s+(\d+\.\d+)%")
     char_acc_re = re.compile(r"Character accuracy:\s+(\d+\.\d+)%")
+    doc_score_re = re.compile(r"DOCUMENT SCORE:\s+(\d+\.\d+)%")
 
     for path in ATTEMPTS_ROOT.glob(pattern):
         # Ensure strict naming convention match to avoid partial prefix matches
-        if not re.search(rf"{re.escape(basename)}-\d+{re.escape(suffix)}$", path.name):
+        if not name_regex.search(path.name):
             continue
 
         try:
             content = path.read_text(encoding="utf-8")
-            line_matches = line_acc_re.findall(content)
-            char_matches = char_acc_re.findall(content)
+            
+            # Try markdown format first (DOCUMENT SCORE)
+            doc_matches = doc_score_re.findall(content)
+            if doc_matches:
+                # For markdown, document score is the main metric
+                line_acc = float(doc_matches[-1])
+                char_acc = line_acc  # Use same value for consistency
+            else:
+                # Fall back to legacy format
+                line_matches = line_acc_re.findall(content)
+                char_matches = char_acc_re.findall(content)
+                
+                if not line_matches or not char_matches:
+                    continue
+                
+                line_acc = float(line_matches[-1])
+                char_acc = float(char_matches[-1])
 
-            if not line_matches or not char_matches:
-                continue
-
-            # Take the last report found in the file
-            line_acc = float(line_matches[-1])
-            char_acc = float(char_matches[-1])
             timestamp = path.stat().st_mtime
 
             match = re.search(rf"{re.escape(basename)}-(\d+)", path.name)
