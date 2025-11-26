@@ -788,15 +788,17 @@ def prompt_continue_after_perfect(next_solution: Path | None) -> Literal["contin
         try:
             if next_solution is not None:
                 prompt = f"Next solution: {next_solution.name}\nContinue? [Y(continue)/q(quit)] "
+                response = input(prompt).strip().lower()
+                if response == "" or response == "y":
+                    return "continue"
+                elif response in {"q", "quit"}:
+                    return "quit"
+                else:
+                    print("Please enter Y or q")
             else:
-                prompt = "All solutions completed!\nQuit? [Y/q(quit)] "
-            response = input(prompt).strip().lower()
-            if response == "" or response == "y":
+                # All solutions completed - any input exits successfully
+                input("All solutions completed! Press Enter to exit. ")
                 return "continue"
-            elif response in {"q", "quit"}:
-                return "quit"
-            else:
-                print("Please enter Y or q")
         except KeyboardInterrupt:
             print()
             raise SystemExit(130)
@@ -835,9 +837,9 @@ def run_drill(
         
         # Parse attempt file
         attempt_text = attempt_path.read_text(encoding="utf-8")
-        # For attempts, ignore INFO markers - extract ALL code blocks
         parsed_attempt = parse_markdown(attempt_text)
-        actual_contents = [b.content for b in parsed_attempt.blocks]
+        # Use target_blocks to match only user-filled blocks (excludes INFO blocks)
+        actual_contents = [b.content for b in parsed_attempt.target_blocks]
         
         # Warn if block count mismatch
         expected_count = len(parsed_solution.target_blocks)
