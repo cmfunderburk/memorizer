@@ -753,10 +753,10 @@ def prompt_next_action(*, allow_quit: bool = False) -> str:
     """
     while True:
         try:
-            prompt = "Action? [Y(retry)/n(stop)/p(peek)"
             if allow_quit:
-                prompt += "/q(quit)"
-            prompt += "] "
+                prompt = "Action? [Y(retry)/n(skip)/p(peek)/q(quit session)] "
+            else:
+                prompt = "Action? [Y(retry)/n(stop)/p(peek)] "
             response = input(prompt).strip().lower()
             if response == "" or response == "y":
                 return "retry"
@@ -909,6 +909,8 @@ def run_focus_session(files: list[Path]) -> int:
         outcome = run_drill(solution_path, allow_quit=True)
         if outcome == "quit":
             return 2
+        elif outcome == "stopped":
+            print("(Skipping this snippet, moving to next...)")
         elif outcome == "perfect":
             # After perfect recall, show celebration and prompt for next action
             print()  # Add spacing after celebration message
@@ -982,15 +984,19 @@ def render_stats(solution_path: Path, history: List[dict]) -> None:
         print("No attempts found.")
         return
 
-    print(f"{'Attempt':<8} {'Date':<12} {'Line Acc':<10} {'Char Acc':<10}")
-    print("-" * 44)
+    print(f"{'Attempt':<8} {'Date':<12} {'Line Acc':<12} {'Char Acc':<10}")
+    print("-" * 46)
 
     for item in history:
         dt = datetime.fromtimestamp(item["timestamp"])
         date_str = dt.strftime("%Y-%m-%d")
-        print(
-            f"{item['number']:<8} {date_str:<12} {item['line_acc']:>5.1f}%    {item['char_acc']:>5.1f}%"
-        )
+        if item["line_acc"] == 100.0:
+            line_str = f"{ANSI_GREEN}100.0% ★{ANSI_RESET}"
+            char_str = f"{ANSI_GREEN}100.0% ★{ANSI_RESET}"
+        else:
+            line_str = f"{item['line_acc']:>5.1f}%  "
+            char_str = f"{item['char_acc']:>5.1f}%  "
+        print(f"{item['number']:<8} {date_str:<12} {line_str:<21} {char_str}")
 
     print(HEADER_RULE)
 
@@ -1004,6 +1010,13 @@ def render_stats(solution_path: Path, history: List[dict]) -> None:
 
     if streak > 0:
         print(f"Current Streak: {streak} perfect attempt{'s' if streak != 1 else ''}!")
+
+    # Show best score achieved
+    best = max(item["line_acc"] for item in history)
+    if best == 100.0:
+        print(f"Best Score: {ANSI_GREEN}100.0%{ANSI_RESET}")
+    else:
+        print(f"Best Score: {best:.1f}% (not yet perfect)")
     print()
 
 
