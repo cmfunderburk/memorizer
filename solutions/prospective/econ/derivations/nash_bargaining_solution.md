@@ -1,40 +1,59 @@
-"""
-Nash Bargaining Solution
+# Nash Bargaining Solution
 
-Context: Cooperative Game Theory
-Objective: Maximize Nash Product
+**Context:** Cooperative Game Theory  |  **Objective:** Maximize Nash Product
 
-Derives the First Order Condition for the Nash Bargaining Solution on the Pareto frontier.
-"""
-=== MEMO START ===
-Problem:
-$$
-\max (u - d_u)(v - d_v)
-$$
-subject to $(u, v) \in S$ (Feasible Set).
+## How It Works
 
-FOC for efficient bargaining on the frontier $v = f(u)$:
-Maximize $P = (u - d_u)(f(u) - d_v)$
+Derives the FOC for the Nash Bargaining Solution on the Pareto frontier.
 
-Log-linearize:
-$$
-\ln(P) = \ln(u - d_u) + \ln(f(u) - d_v)
-$$
+1. Maximize Nash product $(u - d_u)(v - d_v)$ over feasible set
+2. Parameterize frontier as $v = f(u)$
+3. Log-linearize and differentiate
+4. Interpret: slope of frontier equals ratio of surplus shares
 
-Differentiate with respect to $u$:
-$$
-\frac{\partial \ln(P)}{\partial u} = \frac{1}{u - d_u} + \frac{f'(u)}{f(u) - d_v} = 0
-$$
+Key insight: Solution equates MRT on frontier to ratio of gains over disagreement payoffs.
 
-Rearranging:
-$$
--f'(u) = \frac{f(u) - d_v}{u - d_u}
-$$
+## Derivation
 
-Interpretation:
-Slope of frontier = Slope of rectangular hyperbola (level curve of Nash Product).
-Alternatively:
-$$
--\frac{dv}{du} = \frac{v - d_v}{u - d_u}
-$$
-Marginal Rate of Transformation = Ratio of Surplus Shares.
+```lean
+variable (u v du dv : ℝ)
+variable (f : ℝ → ℝ)  -- Pareto frontier: v = f(u)
+variable (f' : ℝ → ℝ) -- Derivative of frontier
+
+-- Disagreement point
+variable (h_disagree : du ≥ 0 ∧ dv ≥ 0)
+
+-- Nash product
+def nash_product (u v du dv : ℝ) : ℝ := (u - du) * (v - dv)
+
+-- On frontier v = f(u), maximize:
+def P (u du dv : ℝ) (f : ℝ → ℝ) : ℝ := (u - du) * (f u - dv)
+
+-- Log-linearized objective
+def ln_P (u du dv : ℝ) (f : ℝ → ℝ) : ℝ := Real.log (u - du) + Real.log (f u - dv)
+
+-- FOC: d(ln P)/du = 0
+-- 1/(u - du) + f'(u)/(f(u) - dv) = 0
+def FOC_nash (u du dv : ℝ) (f f' : ℝ → ℝ) : Prop :=
+  1 / (u - du) + f' u / (f u - dv) = 0
+
+-- Rearranging: -f'(u) = (f(u) - dv) / (u - du)
+def nash_condition (u du dv : ℝ) (f f' : ℝ → ℝ) : Prop :=
+  -f' u = (f u - dv) / (u - du)
+
+-- Interpretation: slope of frontier = ratio of surplus shares
+-- -dv/du = (v - dv) / (u - du)
+-- MRT = Ratio of Surplus Shares
+
+theorem nash_solution_characterization
+    (h_foc : FOC_nash u du dv f f')
+    (h_pos : u > du ∧ f u > dv) :
+    nash_condition u du dv f f' := by
+  sorry
+```
+
+## When to Use
+
+- Bargaining theory: predicting negotiation outcomes
+- Labor economics: wage determination models
+- International economics: treaty negotiations
