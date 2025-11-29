@@ -38,6 +38,7 @@ ANSI_GREEN = "\033[32m"
 ANSI_YELLOW = "\033[33m"
 ANSI_BRIGHT_GREEN = "\033[92m"
 ANSI_BRIGHT_YELLOW = "\033[93m"
+ANSI_DIM = "\033[2m"
 HEADER_RULE = "=" * 40
 INFO_MARKER = "<!-- INFO -->"
 
@@ -268,6 +269,11 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         "--focus",
         action="store_true",
         help="Run drills for every solution under solutions/focus/ in random order.",
+    )
+    parser.add_argument(
+        "--summary",
+        action="store_true",
+        help="Show progress summary for all solutions.",
     )
     return parser.parse_args(argv)
 
@@ -753,10 +759,10 @@ def prompt_next_action(*, allow_quit: bool = False) -> str:
     """
     while True:
         try:
-            prompt = "Action? [Y(retry)/n(stop)/p(peek)"
             if allow_quit:
-                prompt += "/q(quit)"
-            prompt += "] "
+                prompt = "Action? [Y(retry)/n(skip)/p(peek)/q(quit session)] "
+            else:
+                prompt = "Action? [Y(retry)/n(stop)/p(peek)] "
             response = input(prompt).strip().lower()
             if response == "" or response == "y":
                 return "retry"
@@ -909,6 +915,8 @@ def run_focus_session(files: list[Path]) -> int:
         outcome = run_drill(solution_path, allow_quit=True)
         if outcome == "quit":
             return 2
+        elif outcome == "stopped":
+            print("(Skipping this snippet, moving to next...)")
         elif outcome == "perfect":
             # After perfect recall, show celebration and prompt for next action
             print()  # Add spacing after celebration message
@@ -982,15 +990,19 @@ def render_stats(solution_path: Path, history: List[dict]) -> None:
         print("No attempts found.")
         return
 
-    print(f"{'Attempt':<8} {'Date':<12} {'Line Acc':<10} {'Char Acc':<10}")
-    print("-" * 44)
+    print(f"{'Attempt':<8} {'Date':<12} {'Line Acc':<12} {'Char Acc':<10}")
+    print("-" * 46)
 
     for item in history:
         dt = datetime.fromtimestamp(item["timestamp"])
         date_str = dt.strftime("%Y-%m-%d")
-        print(
-            f"{item['number']:<8} {date_str:<12} {item['line_acc']:>5.1f}%    {item['char_acc']:>5.1f}%"
-        )
+        if item["line_acc"] == 100.0:
+            line_str = f"{ANSI_GREEN}100.0% ★{ANSI_RESET}"
+            char_str = f"{ANSI_GREEN}100.0% ★{ANSI_RESET}"
+        else:
+            line_str = f"{item['line_acc']:>5.1f}%  "
+            char_str = f"{item['char_acc']:>5.1f}%  "
+        print(f"{item['number']:<8} {date_str:<12} {line_str:<21} {char_str}")
 
     print(HEADER_RULE)
 
@@ -1004,7 +1016,166 @@ def render_stats(solution_path: Path, history: List[dict]) -> None:
 
     if streak > 0:
         print(f"Current Streak: {streak} perfect attempt{'s' if streak != 1 else ''}!")
+
+    # Show best score achieved
+    best = max(item["line_acc"] for item in history)
+    if best == 100.0:
+        print(f"Best Score: {ANSI_GREEN}100.0%{ANSI_RESET}")
+    else:
+        print(f"Best Score: {best:.1f}% (not yet perfect)")
     print()
+
+
+# ==========================================================================
+# PROGRESS SUMMARY
+# ==========================================================================
+
+@dataclass
+class SolutionSummary:
+    """Summary statistics for a single solution file."""
+    path: Path
+    relative_path: str  # e.g., "focus/insertion_sort.md"
+    attempted: bool
+    last_date: datetime | None
+    last_score: float | None
+    best_score: float | None
+    streak: int  # consecutive 100% at end of history
+    mastered: bool  # last_score == 100.0
+
+
+def compute_summary(solution_path: Path, history: List[dict]) -> SolutionSummary:
+    """Derive summary statistics for a solution from its attempt history."""
+    try:
+        relative = solution_path.relative_to(SOLUTIONS_ROOT)
+    except ValueError:
+        relative = solution_path
+    
+    if not history:
+        return SolutionSummary(
+            path=solution_path,
+            relative_path=str(relative),
+            attempted=False,
+            last_date=None,
+            last_score=None,
+            best_score=None,
+            streak=0,
+            mastered=False,
+        )
+    
+    last_item = history[-1]
+    last_date = datetime.fromtimestamp(last_item["timestamp"])
+    last_score = last_item["line_acc"]
+    best_score = max(item["line_acc"] for item in history)
+    
+    # Calculate streak of consecutive 100% at end
+    streak = 0
+    for item in reversed(history):
+        if item["line_acc"] == 100.0:
+            streak += 1
+        else:
+            break
+    
+    return SolutionSummary(
+        path=solution_path,
+        relative_path=str(relative),
+        attempted=True,
+        last_date=last_date,
+        last_score=last_score,
+        best_score=best_score,
+        streak=streak,
+        mastered=(last_score == 100.0),
+    )
+
+
+def collect_all_summaries() -> List[SolutionSummary]:
+    """Gather summary statistics for all solution files."""
+    summaries = []
+    for solution in SOLUTIONS_ROOT.rglob("*.md"):
+        if solution.name.startswith("."):
+            continue
+        history = get_attempt_history(solution)
+        summaries.append(compute_summary(solution, history))
+    return summaries
+
+
+def render_summary(summaries: List[SolutionSummary]) -> None:
+    """Print progress summary grouped by directory."""
+    print(HEADER_RULE)
+    print(f"{ANSI_BOLD}PROGRESS SUMMARY{ANSI_RESET}")
+    print(HEADER_RULE)
+    print()
+    
+    if not summaries:
+        print("No solution files found.")
+        return
+    
+    # Group by parent directory
+    groups: dict[str, List[SolutionSummary]] = {}
+    for s in summaries:
+        parent = str(Path(s.relative_path).parent)
+        if parent == ".":
+            parent = "(root)"
+        groups.setdefault(parent, []).append(s)
+    
+    # Sort groups: focus first, then alphabetically
+    def group_sort_key(name: str) -> tuple[int, str]:
+        if name == "focus":
+            return (0, name)
+        return (1, name)
+    
+    sorted_groups = sorted(groups.keys(), key=group_sort_key)
+    
+    total_attempted = 0
+    total_mastered = 0
+    total_solutions = len(summaries)
+    latest_date: datetime | None = None
+    
+    collapse_threshold = 10
+    
+    for group_name in sorted_groups:
+        group = sorted(groups[group_name], key=lambda s: s.path.name)
+        attempted_in_group = sum(1 for s in group if s.attempted)
+        mastered_in_group = sum(1 for s in group if s.mastered)
+        
+        total_attempted += attempted_in_group
+        total_mastered += mastered_in_group
+        
+        # Track latest date
+        for s in group:
+            if s.last_date and (latest_date is None or s.last_date > latest_date):
+                latest_date = s.last_date
+        
+        # Collapse large unattempted directories
+        if len(group) > collapse_threshold and attempted_in_group == 0:
+            print(f"{ANSI_DIM}{SOLUTIONS_DIR}/{group_name}/{ANSI_RESET}")
+            print(f"  {ANSI_DIM}({len(group)} files, 0 attempted){ANSI_RESET}")
+            print()
+            continue
+        
+        print(f"{SOLUTIONS_DIR}/{group_name}/")
+        
+        for s in group:
+            name = s.path.name
+            if not s.attempted:
+                print(f"  {ANSI_DIM}{name:<28} —  (no attempts){ANSI_RESET}")
+            elif s.mastered:
+                date_str = s.last_date.strftime("%Y-%m-%d") if s.last_date else ""
+                streak_str = f"streak: {s.streak}" if s.streak > 0 else ""
+                print(f"  {ANSI_GREEN}{name:<28} ✓ 100%  {date_str}  {streak_str}{ANSI_RESET}")
+            else:
+                date_str = s.last_date.strftime("%Y-%m-%d") if s.last_date else ""
+                score_str = f"{s.last_score:>3.0f}%" if s.last_score else ""
+                print(f"  {ANSI_YELLOW}{name:<28} ✗ {score_str}  {date_str}{ANSI_RESET}")
+        
+        print()
+    
+    # Totals
+    print("-" * 40)
+    mastery_str = f"{total_mastered}/{total_solutions} mastered (last attempt 100%)"
+    print(f"TOTALS: {total_attempted}/{total_solutions} attempted | {mastery_str}")
+    if latest_date:
+        print(f"Last practice: {latest_date.strftime('%Y-%m-%d')}")
+    print(HEADER_RULE)
 
 
 # ==========================================================================
@@ -1016,6 +1187,13 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.stats and args.focus:
         die("--stats cannot be combined with --focus.")
+
+    if args.summary:
+        if args.stats or args.focus or args.solution:
+            die("--summary cannot be combined with other options.")
+        summaries = collect_all_summaries()
+        render_summary(summaries)
+        return 0
 
     solution_path: Path | None = None
     if args.solution:
